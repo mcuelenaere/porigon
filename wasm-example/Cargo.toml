@@ -1,0 +1,21 @@
+[package]
+name = "porigon-wasm-example"
+version = "0.1.0"
+authors = ["Maurus Cuelenaere <mcuelenaere@gmail.com>"]
+edition = "2018"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+doctest = false
+
+[dependencies]
+bincode = "1.2.1"
+serde = { version = "1.0", features = ["derive"] }
+porigon-engine = { path = "../engine" }
+wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
+wee_alloc = "0.4.5"
+
+[profile.release]
+# Tell `rustc` to optimize for small code size.
+opt-level = "s"
