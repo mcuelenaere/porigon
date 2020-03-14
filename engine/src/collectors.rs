@@ -1,5 +1,5 @@
 use fst::Streamer;
-use std::cmp::Ordering;
+use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 pub type DocScore = usize;
@@ -31,7 +31,8 @@ impl PartialEq for Document {
 impl Eq for Document {}
 
 pub struct TopScoreCollector {
-    heap: BinaryHeap<Document>,
+    // heap should be a min-heap, so use Reverse to achieve this
+    heap: BinaryHeap<Reverse<Document>>,
     sorted_docs: Vec<Document>,
     limit: usize,
 }
@@ -56,16 +57,16 @@ impl TopScoreCollector {
     }
 
     pub fn process_document(&mut self, doc: Document) {
-        let already_contains_doc = self.heap.iter().any(|other| *other == doc);
+        let already_contains_doc = self.heap.iter().any(|other| other.0 == doc);
         if already_contains_doc {
             return;
         }
 
         if self.heap.len() < self.limit {
-            self.heap.push(doc);
+            self.heap.push(Reverse(doc));
         } else if let Some(mut head) = self.heap.peek_mut() {
-            if *head < doc {
-                *head = doc;
+            if head.0.score < doc.score {
+                *head = Reverse(doc);
             }
         }
     }
@@ -73,8 +74,9 @@ impl TopScoreCollector {
     pub fn top_documents(&mut self) -> &[Document] {
         self.sorted_docs.clear();
         while let Some(doc) = self.heap.pop() {
-            self.sorted_docs.push(doc)
+            self.sorted_docs.push(doc.0)
         }
+        self.sorted_docs.reverse();
         self.sorted_docs.as_slice()
     }
 }
