@@ -78,3 +78,25 @@ impl TopScoreCollector {
         self.sorted_docs.as_slice()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_collector() {
+        let mut collector = TopScoreCollector::new(5);
+        for i in 0..10 {
+            collector.process_document(Document { index: i, score: (i as DocScore) });
+        }
+        let top_docs = collector.top_documents();
+
+        // check scores
+        let scores: Vec<DocScore> = top_docs.iter().map(|doc| doc.score).collect();
+        assert_eq!(scores, vec!(9, 8, 7, 6, 5));
+
+        // check indices
+        let indices: Vec<u64> = top_docs.iter().map(|doc| doc.index).collect();
+        assert_eq!(indices, vec!(9, 8, 7, 6, 5));
+    }
+}
