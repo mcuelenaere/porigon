@@ -57,8 +57,24 @@ impl TopScoreCollector {
     }
 
     pub fn process_document(&mut self, doc: Document) {
-        let already_contains_doc = self.heap.iter().any(|other| other.0 == doc);
-        if already_contains_doc {
+        if let Some(Reverse(existing_doc)) = self.heap.iter().find(|other| other.0 == doc) {
+            if doc.score > existing_doc.score {
+                // The heap already contains this document, but it has a lower score than
+                // the one we are trying to add now. Since BinaryHeap does not have a method
+                // to remove an item, we'll manually pop all the items using sorted_docs as
+                // a scratch space.
+                self.sorted_docs.clear();
+                while let Some(Reverse(item)) = self.heap.pop() {
+                    if item == doc {
+                        break;
+                    }
+                    self.sorted_docs.push(item);
+                }
+                self.heap.push(Reverse(doc));
+                while let Some(item) = self.sorted_docs.pop() {
+                    self.heap.push(Reverse(item));
+                }
+            }
             return;
         }
 
@@ -100,5 +116,25 @@ mod tests {
         // check indices
         let indices: Vec<u64> = top_docs.iter().map(|doc| doc.index).collect();
         assert_eq!(indices, vec!(9, 8, 7, 6, 5));
+    }
+
+    #[test]
+    fn test_collector_duplicates() {
+        let mut collector = TopScoreCollector::new(7);
+        for i in 0..10 {
+            collector.process_document(Document { index: i, score: (i as DocScore) });
+        }
+        collector.process_document(Document { index: 3, score: 6 as DocScore });
+        collector.process_document(Document { index: 6, score: 2 as DocScore });
+        collector.process_document(Document { index: 2, score: 8 as DocScore });
+        let top_docs = collector.top_documents();
+
+        // check scores
+        let scores: Vec<DocScore> = top_docs.iter().map(|doc| doc.score).collect();
+        assert_eq!(scores, vec!(9, 8, 8, 7, 6, 6, 5));
+
+        // check indices
+        let indices: Vec<u64> = top_docs.iter().map(|doc| doc.index).collect();
+        assert_eq!(indices, vec!(9, 2, 8, 7, 6, 3, 5));
     }
 }
