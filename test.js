@@ -1,6 +1,12 @@
 const fs = require('fs');
 const { build, Searcher } = require('./wasm-example/pkg/porigon_wasm_example');
 
+function transliterate(s) {
+    // https://towardsdatascience.com/difference-between-nfd-nfc-nfkd-and-nfkc-explained-with-python-code-e2631f96ae6c
+    // https://en.wikipedia.org/wiki/Combining_character#Unicode_ranges
+    return s.normalize("NFKD").replace(/[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/g, "").toLowerCase();
+}
+
 function* generate_aliases(text) {
     const parts = text.split(/\s+/);
     if (parts.length <= 1) {
@@ -22,8 +28,8 @@ function readData() {
 
         let [id, code, marketCap, name] = line.split(',', 4);
         id = parseInt(id);
-        code = code.toLowerCase();
-        name = name.toLowerCase();
+        code = transliterate(code);
+        name = transliterate(name);
         marketCap = Math.trunc(parseFloat(marketCap));
 
         lookup[id] = code;
@@ -61,7 +67,7 @@ if (process.argv.length !== 3) {
     process.exit(1);
 }
 
-const query = process.argv[2];
+const query = transliterate(process.argv[2]);
 console.log('Searching for', query);
 
 const t0 = process.hrtime.bigint();
