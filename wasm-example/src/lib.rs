@@ -89,16 +89,16 @@ impl Searcher {
 
 #[derive(Serialize, Deserialize)]
 pub struct BuildData {
-    shortcodes: HashMap<u64, String>,
-    names: HashMap<u64, String>,
-    name_aliases: HashMap<u64, String>,
+    shortcodes: Vec<(u64, String)>,
+    names: Vec<(u64, String)>,
+    name_aliases: Vec<(u64, String)>,
     item_ranks: HashMap<u64, u32>,
 }
 
 #[wasm_bindgen]
 pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
     let data: BuildData = val.into_serde().map_err(|err| err_to_js("failed to parse data", err))?;
-    let build_searchable = |input: HashMap<u64, String>| {
+    let build_searchable = |input: Vec<(u64, String)>| {
         let i = input.iter().map(|(key, val)| (val.as_bytes(), *key));
         Searchable::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };

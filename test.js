@@ -1,10 +1,20 @@
 const fs = require('fs');
 const { build, Searcher } = require('./wasm-example/pkg/porigon_wasm_example');
 
+function* generate_aliases(text) {
+    const parts = text.split(/\s+/);
+    if (parts.length <= 1) {
+        return;
+    }
+
+    for (let i = 1; i < parts.length; i++) {
+        yield parts.slice(i).join(' ');
+    }
+}
+
 function readData() {
     const text = fs.readFileSync('./codes.csv', 'utf-8');
-    const shortcodes = {}, names = {}, name_aliases = {}, market_caps = [];
-    const seenCodes = new Set();
+    const shortcodes = [], names = [], name_aliases = [], market_caps = [], lookup = {};
     for (const line of text.split('\n')) {
         if (!line) {
             continue;
@@ -16,16 +26,13 @@ function readData() {
         name = name.toLowerCase();
         marketCap = Math.trunc(parseFloat(marketCap));
 
-        // HACK
-        if (seenCodes.has(code)) {
-            continue;
+        lookup[id] = code;
+        shortcodes.push([id, code]);
+        names.push([id, name]);
+        for (const alias of generate_aliases(name)) {
+            name_aliases.push([id, alias]);
         }
-
-        shortcodes[id] = code;
-        //names[id] = name;
-        //name_aliases[id] = name; // TODO
         market_caps.push([id, marketCap]);
-        seenCodes.add(code);
     }
 
     // sort market caps
@@ -41,6 +48,7 @@ function readData() {
     }
 
     return {
+        lookup,
         shortcodes,
         names,
         name_aliases,
@@ -68,7 +76,7 @@ const searcher = Searcher.new(fst_data);
 const t4 = process.hrtime.bigint();
 const searchResults = searcher.search(query);
 const t5 = process.hrtime.bigint();
-console.log(Array.from(searchResults).map(id => data.shortcodes[id.toString()]));
+console.log(Array.from(searchResults).map(id => data.lookup[id.toString()]));
 const t6 = process.hrtime.bigint();
 /*for (const code of Object.values(data.shortcodes)) {
     searcher.search(code);
