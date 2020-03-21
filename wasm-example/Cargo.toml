@@ -12,9 +12,9 @@ doctest = false
 [dependencies]
 bincode = "1.2.1"
 serde = { version = "1.0", features = ["derive"] }
+stats_alloc = "0.1.8"
 porigon-engine = { path = "../engine" }
 wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
-wee_alloc = "0.4.5"
 
 [profile.release]
 # Tell `rustc` to optimize for small code size.

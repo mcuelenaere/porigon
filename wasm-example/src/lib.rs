@@ -1,13 +1,34 @@
+extern crate stats_alloc;
 extern crate wasm_bindgen;
-extern crate wee_alloc;
 
 use wasm_bindgen::prelude::*;
 use porigon::{Searchable, TopScoreCollector};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
+use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
+use std::alloc::System;
 
 #[global_allocator]
-static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
+static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
+
+#[derive(Serialize)]
+pub struct MemoryStats {
+    pub allocations: usize,
+    pub deallocations: usize,
+    pub bytes_used: isize,
+}
+
+#[wasm_bindgen]
+pub fn memory_stats() -> JsValue {
+    let stats = GLOBAL.stats();
+    let result = MemoryStats {
+        allocations: stats.allocations + stats.reallocations,
+        deallocations: stats.deallocations,
+        bytes_used: stats.bytes_allocated as isize - stats.bytes_deallocated as isize,
+    };
+
+    JsValue::from_serde(&result).unwrap()
+}
 
 #[inline]
 fn err_to_js<D: std::fmt::Display>(prefix: &'static str, displayable: D) -> JsValue {
@@ -16,10 +37,8 @@ fn err_to_js<D: std::fmt::Display>(prefix: &'static str, displayable: D) -> JsVa
 
 #[derive(Serialize, Deserialize)]
 struct SearchData {
-    shortcodes: Searchable,
-    names: Searchable,
-    name_aliases: Searchable,
-    item_ranks: HashMap<u64, u32>,
+    titles: Searchable,
+    ratings: HashMap<u64, u32>,
 }
 
 impl SearchData {
@@ -38,61 +57,53 @@ pub struct Searcher {
     collector: TopScoreCollector,
 }
 
+#[derive(Serialize)]
+pub struct SearchResult {
+    pub index: u64,
+    pub score: usize,
+}
+
 #[wasm_bindgen]
 impl Searcher {
-    pub fn new(bytes: Vec<u8>) -> Result<Searcher, JsValue> {
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: Vec<u8>, limit: usize) -> Result<Searcher, JsValue> {
         let data: SearchData = SearchData::from_bytes(bytes).map_err(|err| err_to_js("could not parse data", err))?;
-        let collector = TopScoreCollector::new(25);
+        let collector = TopScoreCollector::new(limit);
         Ok(Searcher { data, collector })
     }
 
-    pub fn search(&mut self, query: &str) -> Vec<u64> {
-        let item_ranks = &self.data.item_ranks;
+    pub fn search(&mut self, query: &str) -> JsValue {
+        let ratings = &self.data.ratings;
         let for_fixed_score = |score: usize| {
-            move |_: &[u8], index: u64| (score << 16) | (*item_ranks.get(&index).unwrap_or(&0) as usize)
+            move |_: &[u8], index: u64| score + (*ratings.get(&index).unwrap_or(&0) as usize)
         };
 
-        let exact_match_score = for_fixed_score(100);
-        let starts_with_score = for_fixed_score(95);
-        let alias_exact_match_score = for_fixed_score(90);
-        let alias_starts_with_score = for_fixed_score(85);
-        let mut s1 = self.data.shortcodes
+        let exact_match_scorer = for_fixed_score(10000);
+        let starts_with_scorer = for_fixed_score(0);
+        let mut s1 = self.data.titles
             .exact_match(query)
-            .with_score(&exact_match_score);
-        let mut s2 = self.data.shortcodes
+            .with_score(&exact_match_scorer);
+        let mut s2 = self.data.titles
             .starts_with(query)
-            .with_score(&starts_with_score);
-        let mut s3 = self.data.names
-            .exact_match(query)
-            .with_score(&exact_match_score);
-        let mut s4 = self.data.names
-            .starts_with(query)
-            .with_score(&starts_with_score);
-        let mut s5 = self.data.name_aliases
-            .exact_match(query)
-            .with_score(&alias_exact_match_score);
-        let mut s6 = self.data.name_aliases
-            .starts_with(query)
-            .with_score(&alias_starts_with_score);
+            .with_score(&starts_with_scorer);
 
         self.collector.reset();
         self.collector.consume_stream(&mut s1);
         self.collector.consume_stream(&mut s2);
-        self.collector.consume_stream(&mut s3);
-        self.collector.consume_stream(&mut s4);
-        self.collector.consume_stream(&mut s5);
-        self.collector.consume_stream(&mut s6);
 
-        self.collector.top_documents().iter().map(|doc| doc.index).collect()
+        let results: Vec<SearchResult> = self.collector.top_documents()
+            .iter()
+            .map(|doc| SearchResult { score: doc.score, index: doc.index })
+            .collect();
+
+        JsValue::from_serde(&results).unwrap()
     }
 }
 
 #[derive(Serialize, Deserialize)]
 pub struct BuildData {
-    shortcodes: Vec<(u64, String)>,
-    names: Vec<(u64, String)>,
-    name_aliases: Vec<(u64, String)>,
-    item_ranks: HashMap<u64, u32>,
+    titles: Vec<(u64, String)>,
+    ratings: HashMap<u64, u32>,
 }
 
 #[wasm_bindgen]
@@ -104,10 +115,8 @@ pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
         Searchable::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };
     let search_data = SearchData {
-        shortcodes: build_searchable(data.shortcodes)?,
-        names: build_searchable(data.names)?,
-        name_aliases: build_searchable(data.name_aliases)?,
-        item_ranks: data.item_ranks,
+        titles: build_searchable(data.titles)?,
+        ratings: data.ratings,
     };
     search_data.to_bytes().map_err(|err| err_to_js("could not serialize search data", err))
 }

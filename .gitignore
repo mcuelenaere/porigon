@@ -1,4 +1,5 @@
 .idea/
 target/
+wasm-example/data
 wasm-example/pkg
 Cargo.lock
