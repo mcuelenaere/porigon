@@ -10,14 +10,26 @@ mod collectors;
 mod serialization;
 
 type ScorerFn<'a> = dyn Fn(&[u8], u64) -> collectors::DocScore + 'a;
-pub struct ScoredStream<'m, A>(fst::map::Stream<'m, A>, &'m ScorerFn<'m>) where A: fst::Automaton;
+pub struct ScoredStream<'a, S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>> {
+    scorer: &'a ScorerFn<'a>,
+    wrapped: S,
+}
 
-impl<'a, 'm, A: fst::Automaton> Streamer<'a> for ScoredStream<'m, A> {
+impl<'a, S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>> ScoredStream<'a, S> {
+    pub fn new(streamer: S, scorer: &'a ScorerFn<'a>) -> Self {
+        Self {
+            scorer,
+            wrapped: streamer,
+        }
+    }
+}
+
+impl<'a, 'b, S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>> Streamer<'a> for ScoredStream<'b, S> {
     type Item = (collectors::DocScore, u64);
 
     fn next(&'a mut self) -> Option<Self::Item> {
-        let scorer_fn = &self.1;
-        self.0.next().map(|(key, index)| (scorer_fn(key, index), index))
+        let scorer_fn = &self.scorer;
+        self.wrapped.next().map(|(key, index)| (scorer_fn(key, index), index))
     }
 }
 
@@ -81,11 +93,11 @@ pub struct SearchStream<'s, A: Automaton> {
 }
 
 impl<'s, A: Automaton + 's> SearchStream<'s, A> {
-    pub fn with_score(self, func: &'s ScorerFn<'s>) -> DeduplicatorStream<'s, ScoredStream<'s, A>> {
-        DeduplicatorStream::new(ScoredStream(self.stream, func), self.duplicates)
+    pub fn with_score(self, func: &'s ScorerFn<'s>) -> DeduplicatorStream<'s, ScoredStream<'s, fst::map::Stream<'s, A>>> {
+        DeduplicatorStream::new(ScoredStream::new(self.stream, func), self.duplicates)
     }
-    pub fn without_score(self) -> DeduplicatorStream<'s, ScoredStream<'s, A>> {
-        DeduplicatorStream::new(ScoredStream(self.stream, &|_, _| 0), self.duplicates)
+    pub fn without_score(self) -> DeduplicatorStream<'s, ScoredStream<'s, fst::map::Stream<'s, A>>> {
+        DeduplicatorStream::new(ScoredStream::new(self.stream, &|_, _| 0), self.duplicates)
     }
 }
 
