@@ -175,11 +175,19 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    impl<'a, S: for<'b> Streamer<'b, Item=(collectors::DocScore, u64)>> DeduplicatorStream<'a, S> {
-        pub fn into_vec(mut self) -> Vec<(collectors::DocScore, u64)> {
+    trait IntoVec<T> {
+        fn into_vec(self) -> Vec<T>;
+    }
+
+    impl<'a, S, I> IntoVec<I> for S
+    where
+        S: for<'b> Streamer<'b, Item=I> + 'a,
+        I: 'a
+    {
+        fn into_vec(mut self) -> Vec<I> {
             let mut items = Vec::new();
-            while let Some((score, idx)) = self.next() {
-                items.push((score, idx));
+            while let Some(item) = self.next() {
+                items.push(item);
             }
             items
         }
