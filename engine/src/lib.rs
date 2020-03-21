@@ -125,35 +125,31 @@ impl Searchable {
     }
 
     pub fn build_from_iter<'a, I>(iter: I) -> Result<Searchable, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
-        // sort items
-        let mut copy: Vec<(&'a [u8], u64)> = iter.into_iter().collect();
-        copy.sort_by_key(|entry| entry.0);
-
         // group items by key
         let mut duplicates = HashMap::new();
         let mut counter: u64 = 1;
-        copy = copy.iter()
-            .group_by(|(key, _)| *key)
+        let grouped = iter.into_iter().group_by(|(key, _)| *key);
+        let deduped_iter = grouped
             .into_iter()
             .map(|(key, mut group)| {
                 let (_, first) = group.next().unwrap();
                 if let Some((_, second)) = group.next() {
-                    let mut indices = vec!(*first, *second);
+                    let mut indices = vec!(first, second);
                     while let Some((_, next)) = group.next() {
-                        indices.push(*next);
+                        indices.push(next);
                     }
                     duplicates.insert(counter, indices);
                     let dup_index = counter | DUPES_TAG;
                     counter += 1;
                     (key, dup_index)
                 } else {
-                    (key, *first)
+                    (key, first)
                 }
-            })
-            .collect();
+            });
 
         // build map
-        let map = Map::from_iter(copy)?;
+        let map = Map::from_iter(deduped_iter)?;
+
         Ok(Self {
             map: map.into(),
             duplicates,
@@ -179,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_build() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("bar".as_bytes(), 1));
+        let items = vec!(("bar".as_bytes(), 1), ("foo".as_bytes(), 0));
         let searchable = Searchable::build_from_iter(items)?;
         let results = searchable.map.as_ref().stream().into_str_vec()?;
         assert_eq!(results.len(), 2);
@@ -189,7 +185,7 @@ mod tests {
 
     #[test]
     fn test_searchable_exact_match() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("fo".as_bytes(), 1), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
@@ -206,7 +202,7 @@ mod tests {
 
     #[test]
     fn test_searchable_starts_with() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("fo".as_bytes(), 1), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
@@ -223,7 +219,7 @@ mod tests {
 
     #[test]
     fn test_searchable_subsequence() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1), ("bar_foo".as_bytes(), 2));
+        let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
@@ -245,7 +241,7 @@ mod tests {
 
     #[test]
     fn test_scored_stream() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("fo".as_bytes(), 1), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
         let searchable = Searchable::build_from_iter(items)?;
 
         // use key

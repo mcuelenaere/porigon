@@ -99,7 +99,8 @@ pub struct BuildData {
 pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
     let data: BuildData = val.into_serde().map_err(|err| err_to_js("failed to parse data", err))?;
     let build_searchable = |input: Vec<(u64, String)>| {
-        let i = input.iter().map(|(key, val)| (val.as_bytes(), *key));
+        let mut i: Vec<(&[u8], u64)> = input.iter().map(|(key, val)| (val.as_bytes(), *key)).collect();
+        i.sort_by_key(|(key, _)| *key);
         Searchable::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };
     let search_data = SearchData {
