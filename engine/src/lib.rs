@@ -10,12 +10,16 @@ mod collectors;
 mod serialization;
 
 type ScorerFn<'a> = dyn Fn(&[u8], u64) -> collectors::DocScore + 'a;
-pub struct ScoredStream<'a, S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>> {
+pub struct ScoredStream<'a, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
+{
     scorer: &'a ScorerFn<'a>,
     wrapped: S,
 }
 
-impl<'a, S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>> ScoredStream<'a, S> {
+impl<'a, S> ScoredStream<'a, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
+{
     pub fn new(streamer: S, scorer: &'a ScorerFn<'a>) -> Self {
         Self {
             scorer,
@@ -24,7 +28,9 @@ impl<'a, S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>> ScoredStream<'a, S> {
     }
 }
 
-impl<'a, 'b, S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>> Streamer<'a> for ScoredStream<'b, S> {
+impl<'a, 'b, S> Streamer<'a> for ScoredStream<'b, S>
+    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>
+{
     type Item = (collectors::DocScore, u64);
 
     fn next(&'a mut self) -> Option<Self::Item> {
@@ -35,25 +41,46 @@ impl<'a, 'b, S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>> Streamer<'a> for Sco
 
 const DUPES_TAG: u64 = (1 << 63);
 
-pub struct DeduplicatorStream<'a, S: for<'b> Streamer<'b, Item=(collectors::DocScore, u64)>> {
-    cur_iter: Option<(std::slice::Iter<'a, u64>, collectors::DocScore)>,
+pub struct DeduplicatorStream<'a, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
+{
+    cur_key: Vec<u8>,
+    cur_iter: Option<std::slice::Iter<'a, u64>>,
     duplicates: &'a HashMap<u64, Vec<u64>>,
     wrapped: S,
 }
 
-impl<'a, 'b, S: for<'c> Streamer<'c, Item=(collectors::DocScore, u64)>> Streamer<'a> for DeduplicatorStream<'b, S> {
-    type Item = (collectors::DocScore, u64);
+impl<'a, S> DeduplicatorStream<'a, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
+{
+    pub fn new(streamer: S, duplicates: &'a HashMap<u64, Vec<u64>>) -> Self {
+        Self {
+            cur_key: Vec::new(),
+            cur_iter: None,
+            duplicates,
+            wrapped: streamer,
+        }
+    }
+}
+
+impl<'a, 'b, S> Streamer<'a> for DeduplicatorStream<'b, S>
+    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>
+{
+    type Item = (&'a [u8], u64);
 
     fn next(&'a mut self) -> Option<Self::Item> {
-        if let Some((iter, score)) = &mut self.cur_iter {
+        if let Some(iter) = &mut self.cur_iter {
             match iter.next() {
-                Some(index) => return Some((*score, *index)),
-                None => self.cur_iter = None
+                Some(index) => return Some((self.cur_key.as_slice(), *index)),
+                None => {
+                    self.cur_iter = None;
+                    self.cur_key.clear();
+                }
             }
         }
 
         match self.wrapped.next() {
-            Some((score, index)) => {
+            Some((key, index)) => {
                 if index & DUPES_TAG != 0 {
                     let dupes = match self.duplicates.get(&(index ^ DUPES_TAG)) {
                         Some(x) => x,
@@ -63,26 +90,18 @@ impl<'a, 'b, S: for<'c> Streamer<'c, Item=(collectors::DocScore, u64)>> Streamer
                     let mut iter = dupes.iter();
                     match iter.next() {
                         Some(index) => {
-                            self.cur_iter = Some((iter, score));
-                            Some((score, *index))
+                            self.cur_key.clear();
+                            self.cur_key.extend_from_slice(key);
+                            self.cur_iter = Some(iter);
+                            Some((key, *index))
                         }
                         None => None,
                     }
                 } else {
-                    Some((score, index))
+                    Some((key, index))
                 }
             },
             None => None,
-        }
-    }
-}
-
-impl<'a, S: for<'b> Streamer<'b, Item=(collectors::DocScore, u64)>> DeduplicatorStream<'a, S> {
-    pub fn new(streamer: S, duplicates: &'a HashMap<u64, Vec<u64>>) -> Self {
-        Self {
-            cur_iter: None,
-            duplicates,
-            wrapped: streamer,
         }
     }
 }
@@ -93,11 +112,12 @@ pub struct SearchStream<'s, A: Automaton> {
 }
 
 impl<'s, A: Automaton + 's> SearchStream<'s, A> {
-    pub fn with_score(self, func: &'s ScorerFn<'s>) -> DeduplicatorStream<'s, ScoredStream<'s, fst::map::Stream<'s, A>>> {
-        DeduplicatorStream::new(ScoredStream::new(self.stream, func), self.duplicates)
+    pub fn with_score(self, func: &'s ScorerFn<'s>) -> ScoredStream<'s, DeduplicatorStream<'s, fst::map::Stream<'s, A>>> {
+        ScoredStream::new(DeduplicatorStream::new(self.stream, self.duplicates), func)
     }
-    pub fn without_score(self) -> DeduplicatorStream<'s, ScoredStream<'s, fst::map::Stream<'s, A>>> {
-        DeduplicatorStream::new(ScoredStream::new(self.stream, &|_, _| 0), self.duplicates)
+
+    pub fn without_score(self) -> ScoredStream<'s, DeduplicatorStream<'s, fst::map::Stream<'s, A>>> {
+        ScoredStream::new(DeduplicatorStream::new(self.stream, self.duplicates), &|_, _| 0)
     }
 }
 
