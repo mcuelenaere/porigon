@@ -1,6 +1,5 @@
-use itertools::Itertools;
 use fst::{IntoStreamer, Streamer, Map};
-use fst::automaton::{Automaton, Str, Subsequence, StartsWith};
+use fst::automaton::{Automaton, Str, Subsequence};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
@@ -8,116 +7,24 @@ pub use self::collectors::TopScoreCollector;
 
 mod collectors;
 mod serialization;
+mod streams;
 
-type ScorerFn<'a> = dyn Fn(&[u8], u64) -> collectors::DocScore + 'a;
-pub struct ScoredStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
-{
-    scorer: &'a ScorerFn<'a>,
-    wrapped: S,
-}
+type Score = usize;
 
-impl<'a, S> ScoredStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
-{
-    pub fn new(streamer: S, scorer: &'a ScorerFn<'a>) -> Self {
-        Self {
-            scorer,
-            wrapped: streamer,
-        }
+type BoxedStream<'f> = Box<dyn for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> + 'f>;
+pub struct SearchStream<'s>(BoxedStream<'s>);
+
+impl<'s> SearchStream<'s> {
+    pub fn rescore(self, func: &'s streams::ScorerFn<'s>) -> Self {
+        SearchStream(Box::new(streams::ScoredStream::new(self, func)))
     }
 }
 
-impl<'a, 'b, S> Streamer<'a> for ScoredStream<'b, S>
-    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>
-{
-    type Item = (collectors::DocScore, u64);
+impl<'a, 's> Streamer<'a> for SearchStream<'s> {
+    type Item = (&'a [u8], u64, Score);
 
     fn next(&'a mut self) -> Option<Self::Item> {
-        let scorer_fn = &self.scorer;
-        self.wrapped.next().map(|(key, index)| (scorer_fn(key, index), index))
-    }
-}
-
-const DUPES_TAG: u64 = (1 << 63);
-
-pub struct DeduplicatorStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
-{
-    cur_key: Vec<u8>,
-    cur_iter: Option<std::slice::Iter<'a, u64>>,
-    duplicates: &'a HashMap<u64, Vec<u64>>,
-    wrapped: S,
-}
-
-impl<'a, S> DeduplicatorStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64)>
-{
-    pub fn new(streamer: S, duplicates: &'a HashMap<u64, Vec<u64>>) -> Self {
-        Self {
-            cur_key: Vec::new(),
-            cur_iter: None,
-            duplicates,
-            wrapped: streamer,
-        }
-    }
-}
-
-impl<'a, 'b, S> Streamer<'a> for DeduplicatorStream<'b, S>
-    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64)>
-{
-    type Item = (&'a [u8], u64);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
-        if let Some(iter) = &mut self.cur_iter {
-            match iter.next() {
-                Some(index) => return Some((self.cur_key.as_slice(), *index)),
-                None => {
-                    self.cur_iter = None;
-                    self.cur_key.clear();
-                }
-            }
-        }
-
-        match self.wrapped.next() {
-            Some((key, index)) => {
-                if index & DUPES_TAG != 0 {
-                    let dupes = match self.duplicates.get(&(index ^ DUPES_TAG)) {
-                        Some(x) => x,
-                        None => return None,
-                    };
-
-                    let mut iter = dupes.iter();
-                    match iter.next() {
-                        Some(index) => {
-                            self.cur_key.clear();
-                            self.cur_key.extend_from_slice(key);
-                            self.cur_iter = Some(iter);
-                            Some((key, *index))
-                        }
-                        None => None,
-                    }
-                } else {
-                    Some((key, index))
-                }
-            },
-            None => None,
-        }
-    }
-}
-
-pub struct SearchStream<'s, A: Automaton> {
-    duplicates: &'s HashMap<u64, Vec<u64>>,
-    stream: fst::map::Stream<'s, A>,
-}
-
-impl<'s, A: Automaton + 's> SearchStream<'s, A> {
-    pub fn with_score(self, func: &'s ScorerFn<'s>) -> ScoredStream<'s, DeduplicatorStream<'s, fst::map::Stream<'s, A>>> {
-        ScoredStream::new(DeduplicatorStream::new(self.stream, self.duplicates), func)
-    }
-
-    pub fn without_score(self) -> ScoredStream<'s, DeduplicatorStream<'s, fst::map::Stream<'s, A>>> {
-        ScoredStream::new(DeduplicatorStream::new(self.stream, self.duplicates), &|_, _| 0)
+        self.0.next()
     }
 }
 
@@ -128,20 +35,33 @@ pub struct Searchable {
 }
 
 impl Searchable {
-    fn create_stream<A: fst::automaton::Automaton>(&self, automaton: A) -> SearchStream<A> {
-        let stream = self.map.as_ref().search(automaton).into_stream();
-        SearchStream {
-            duplicates: &self.duplicates,
-            stream
+    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> SearchStream<'a>
+        where A: Automaton
+    {
+        struct Adapter<'m, A>(fst::map::Stream<'m, A>)
+            where A: Automaton;
+
+        impl<'a, 'm, A> Streamer<'a> for Adapter<'m, A>
+            where A: Automaton
+        {
+            type Item = (&'a [u8], u64, Score);
+
+            fn next(&'a mut self) -> Option<Self::Item> {
+                self.0.next().map(|(key, index)| (key, index, 0))
+            }
         }
+
+        let stream = self.map.as_ref().search(automaton).into_stream();
+        let deduped_stream = streams::DeduplicatedStream::new(Adapter(stream), &self.duplicates);
+        SearchStream(Box::new(deduped_stream))
     }
 
-    pub fn starts_with<'a>(&'a self, query: &'a str) -> SearchStream<'a, StartsWith<Str>> {
+    pub fn starts_with<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Str::new(query).starts_with();
         self.create_stream(automaton)
     }
 
-    pub fn exact_match<'a>(&'a self, query: &'a str) -> SearchStream<'a, Str> {
+    pub fn exact_match<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Str::new(query);
         self.create_stream(automaton)
     }
@@ -151,33 +71,14 @@ impl Searchable {
         Ok(self.create_stream(automaton))
     }*/
 
-    pub fn subsequence<'a>(&'a self, query: &'a str) -> SearchStream<'a, Subsequence> {
+    pub fn subsequence<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
 
     pub fn build_from_iter<'a, I>(iter: I) -> Result<Searchable, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
         // group items by key
-        let mut duplicates = HashMap::new();
-        let mut counter: u64 = 1;
-        let grouped = iter.into_iter().group_by(|(key, _)| *key);
-        let deduped_iter = grouped
-            .into_iter()
-            .map(|(key, mut group)| {
-                let (_, first) = group.next().unwrap();
-                if let Some((_, second)) = group.next() {
-                    let mut indices = vec!(first, second);
-                    while let Some((_, next)) = group.next() {
-                        indices.push(next);
-                    }
-                    duplicates.insert(counter, indices);
-                    let dup_index = counter | DUPES_TAG;
-                    counter += 1;
-                    (key, dup_index)
-                } else {
-                    (key, first)
-                }
-            });
+        let (deduped_iter, duplicates) = streams::dedupe_from_iter(iter);
 
         // build map
         let map = Map::from_iter(deduped_iter)?;
@@ -195,19 +96,12 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    trait IntoVec<T> {
-        fn into_vec(self) -> Vec<T>;
-    }
-
-    impl<'a, S, I> IntoVec<I> for S
-    where
-        S: for<'b> Streamer<'b, Item=I> + 'a,
-        I: 'a
+    impl<'a> SearchStream<'a>
     {
-        fn into_vec(mut self) -> Vec<I> {
+        fn into_vec(mut self) -> Vec<(String, u64, Score)> {
             let mut items = Vec::new();
-            while let Some(item) = self.next() {
-                items.push(item);
+            while let Some((key, index, score)) = self.next() {
+                items.push((String::from_utf8(key.to_vec()).unwrap(), index, score));
             }
             items
         }
@@ -229,13 +123,13 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
-        let results = searchable.exact_match("bar").without_score().into_vec();
+        let results = searchable.exact_match("bar").into_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.exact_match("foo").without_score().into_vec();
+        let results = searchable.exact_match("foo").into_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!((0, 0)));
+        assert_eq!(results, vec!(("foo".to_string(), 0, 0)));
 
         Ok(())
     }
@@ -246,13 +140,13 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
-        let results = searchable.starts_with("b").without_score().into_vec();
+        let results = searchable.starts_with("b").into_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.starts_with("foo").without_score().into_vec();
+        let results = searchable.starts_with("foo").into_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!((0, 0), (0, 2)));
+        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 0)));
 
         Ok(())
     }
@@ -263,18 +157,18 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // negative match
-        let results = searchable.subsequence("m").without_score().into_vec();
+        let results = searchable.subsequence("m").into_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.subsequence("fb").without_score().into_vec();
+        let results = searchable.subsequence("fb").into_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!((0, 1)));
+        assert_eq!(results, vec!(("foo_bar".to_string(), 1, 0)));
 
         // other positive match
-        let results = searchable.subsequence("bf").without_score().into_vec();
+        let results = searchable.subsequence("bf").into_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!((0, 2)));
+        assert_eq!(results, vec!(("bar_foo".to_string(), 2, 0)));
 
         Ok(())
     }
@@ -285,14 +179,14 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // use key
-        let results = searchable.starts_with("foo").with_score(&|key, _| key.len()).into_vec();
+        let results = searchable.starts_with("foo").rescore(&|key, _| key.len()).into_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!((3, 0), (6, 2)));
+        assert_eq!(results, vec!(("foo".to_string(), 0, 3), ("foobar".to_string(), 2, 6)));
 
         // use index
-        let results = searchable.starts_with("foo").with_score(&|_, idx| (idx * 2) as usize).into_vec();
+        let results = searchable.starts_with("foo").rescore(&|_, idx| (idx * 2) as usize).into_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!((0, 0), (4, 2)));
+        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 4)));
 
         Ok(())
     }
@@ -302,9 +196,9 @@ mod tests {
         let items = vec!(("foo".as_bytes(), 0), ("foo".as_bytes(), 1), ("foobar".as_bytes(), 2));
         let searchable = Searchable::build_from_iter(items)?;
 
-        let results = searchable.exact_match("foo").without_score().into_vec();
+        let results = searchable.exact_match("foo").into_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!((0, 0), (0, 1)));
+        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foo".to_string(), 1, 0)));
 
         Ok(())
     }

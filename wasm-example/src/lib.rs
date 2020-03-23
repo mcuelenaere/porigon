@@ -82,10 +82,10 @@ impl Searcher {
         let starts_with_scorer = for_fixed_score(0);
         let mut s1 = self.data.titles
             .exact_match(query)
-            .with_score(&exact_match_scorer);
+            .rescore(&exact_match_scorer);
         let mut s2 = self.data.titles
             .starts_with(query)
-            .with_score(&starts_with_scorer);
+            .rescore(&starts_with_scorer);
 
         self.collector.reset();
         self.collector.consume_stream(&mut s1);
