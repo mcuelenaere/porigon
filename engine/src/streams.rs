@@ -2,18 +2,19 @@ use fst::Streamer;
 use itertools::Itertools;
 use std::collections::HashMap;
 
-pub type ScorerFn<'a> = dyn Fn(&[u8], u64) -> crate::Score + 'a;
-pub struct ScoredStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>
+pub struct ScoredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score
 {
-    scorer: &'a ScorerFn<'a>,
+    scorer: F,
     wrapped: S,
 }
 
-impl<'a, S> ScoredStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>
+impl<F, S> ScoredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score
 {
-    pub fn new(streamer: S, scorer: &'a ScorerFn<'a>) -> Self {
+    pub fn new(streamer: S, scorer: F) -> Self {
         Self {
             scorer,
             wrapped: streamer,
@@ -21,14 +22,15 @@ impl<'a, S> ScoredStream<'a, S>
     }
 }
 
-impl<'a, 'b, S> Streamer<'a> for ScoredStream<'b, S>
-    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64, crate::Score)>
+impl<'a, F, S> Streamer<'a> for ScoredStream<F, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score
 {
     type Item = (&'a [u8], u64, crate::Score);
 
     fn next(&'a mut self) -> Option<Self::Item> {
         let scorer_fn = &self.scorer;
-        self.wrapped.next().map(|(key, index, _)| (key, index, scorer_fn(key, index)))
+        self.wrapped.next().map(|(key, index, old_score)| (key, index, scorer_fn(key, index, old_score)))
     }
 }
 

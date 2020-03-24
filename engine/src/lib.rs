@@ -15,7 +15,7 @@ type BoxedStream<'f> = Box<dyn for<'a> Streamer<'a, Item = (&'a [u8], u64, Score
 pub struct SearchStream<'s>(BoxedStream<'s>);
 
 impl<'s> SearchStream<'s> {
-    pub fn rescore(self, func: &'s streams::ScorerFn<'s>) -> Self {
+    pub fn rescore<F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score>(self, func: F) -> Self {
         SearchStream(Box::new(streams::ScoredStream::new(self, func)))
     }
 
@@ -183,12 +183,12 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // use key
-        let results = searchable.starts_with("foo").rescore(&|key, _| key.len()).into_vec();
+        let results = searchable.starts_with("foo").rescore(|key, _, _| key.len()).into_vec();
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec!(("foo".to_string(), 0, 3), ("foobar".to_string(), 2, 6)));
 
         // use index
-        let results = searchable.starts_with("foo").rescore(&|_, idx| (idx * 2) as usize).into_vec();
+        let results = searchable.starts_with("foo").rescore(|_, idx, _| (idx * 2) as usize).into_vec();
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 4)));
 

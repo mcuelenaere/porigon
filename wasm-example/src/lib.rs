@@ -75,17 +75,15 @@ impl Searcher {
     pub fn search(&mut self, query: &str) -> JsValue {
         let ratings = &self.data.ratings;
         let for_fixed_score = |score: usize| {
-            move |_: &[u8], index: u64| score + (*ratings.get(&index).unwrap_or(&0) as usize)
+            move |_: &[u8], index: u64, _: usize| score + (*ratings.get(&index).unwrap_or(&0) as usize)
         };
 
-        let exact_match_scorer = for_fixed_score(10000);
-        let starts_with_scorer = for_fixed_score(0);
         let mut s1 = self.data.titles
             .exact_match(query)
-            .rescore(&exact_match_scorer);
+            .rescore(for_fixed_score(10000));
         let mut s2 = self.data.titles
             .starts_with(query)
-            .rescore(&starts_with_scorer);
+            .rescore(for_fixed_score(0));
 
         self.collector.reset();
         self.collector.consume_stream(&mut s1);
