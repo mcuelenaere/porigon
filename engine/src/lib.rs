@@ -18,6 +18,10 @@ impl<'s> SearchStream<'s> {
     pub fn rescore(self, func: &'s streams::ScorerFn<'s>) -> Self {
         SearchStream(Box::new(streams::ScoredStream::new(self, func)))
     }
+
+    pub fn filter<F: 's + Fn(&[u8], u64, crate::Score) -> bool>(self, func: F) -> Self {
+        SearchStream(Box::new(streams::FilteredStream::new(self, func)))
+    }
 }
 
 impl<'a, 's> Streamer<'a> for SearchStream<'s> {
@@ -187,6 +191,28 @@ mod tests {
         let results = searchable.starts_with("foo").rescore(&|_, idx| (idx * 2) as usize).into_vec();
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 4)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter() -> TestResult {
+        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
+        let searchable = Searchable::build_from_iter(items)?;
+
+        let results = searchable
+            .starts_with("foo")
+            .filter(|key, _, _| key != "foobar".as_bytes())
+            .into_vec();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results, vec!(("foo".to_string(), 0, 0)));
+
+        let results = searchable
+            .starts_with("foo")
+            .filter(|key, _, _| key == "foobar".as_bytes())
+            .into_vec();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results, vec!(("foobar".to_string(), 2, 0)));
 
         Ok(())
     }

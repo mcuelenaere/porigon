@@ -32,6 +32,52 @@ impl<'a, 'b, S> Streamer<'a> for ScoredStream<'b, S>
     }
 }
 
+pub struct FilteredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> bool,
+{
+    cur_key: Vec<u8>,
+    filter: F,
+    wrapped: S,
+}
+
+impl<F, S> FilteredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> bool,
+{
+    pub fn new(streamer: S, filter: F) -> Self {
+        Self {
+            cur_key: Vec::new(),
+            filter,
+            wrapped: streamer,
+        }
+    }
+}
+
+impl<'a, F, S> Streamer<'a> for FilteredStream<F, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> bool,
+{
+    type Item = (&'a [u8], u64, crate::Score);
+
+    fn next(&'a mut self) -> Option<Self::Item> {
+        let filter_fn = &self.filter;
+        while let Some((key, index, score)) = self.wrapped.next() {
+            if !filter_fn(key, index, score) {
+                continue;
+            }
+
+            // borrow checker workaround: we can't seem to pass the key as-is, so we make
+            // an (useless) copy and return that instead
+            self.cur_key.clear();
+            self.cur_key.extend_from_slice(key);
+            return Some((self.cur_key.as_slice(), index, score));
+        }
+
+        None
+    }
+}
+
 const DUPES_TAG: u64 = (1 << 63);
 
 pub struct DeduplicatedStream<'a, S>
