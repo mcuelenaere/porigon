@@ -2,38 +2,6 @@ use fst::Streamer;
 use itertools::Itertools;
 use std::collections::HashMap;
 
-pub struct ScoredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
-          F: Fn(&[u8], u64, crate::Score) -> crate::Score
-{
-    scorer: F,
-    wrapped: S,
-}
-
-impl<F, S> ScoredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
-          F: Fn(&[u8], u64, crate::Score) -> crate::Score
-{
-    pub fn new(streamer: S, scorer: F) -> Self {
-        Self {
-            scorer,
-            wrapped: streamer,
-        }
-    }
-}
-
-impl<'a, F, S> Streamer<'a> for ScoredStream<F, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
-          F: Fn(&[u8], u64, crate::Score) -> crate::Score
-{
-    type Item = (&'a [u8], u64, crate::Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
-        let scorer_fn = &self.scorer;
-        self.wrapped.next().map(|(key, index, old_score)| (key, index, scorer_fn(key, index, old_score)))
-    }
-}
-
 pub struct FilteredStream<F, S>
     where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
           F: Fn(&[u8], u64, crate::Score) -> bool,

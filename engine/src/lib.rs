@@ -17,7 +17,7 @@ pub struct SearchStream<'s>(BoxedStream<'s>);
 
 impl<'s> SearchStream<'s> {
     pub fn rescore<F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score>(self, func: F) -> Self {
-        SearchStream(Box::new(streams::ScoredStream::new(self, func)))
+        self.map(move |key, index, score| (key, index, func(key, index, score)))
     }
 
     pub fn filter<F: 's + Fn(&[u8], u64, crate::Score) -> bool>(self, func: F) -> Self {
