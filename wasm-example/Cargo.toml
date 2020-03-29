@@ -13,7 +13,7 @@ doctest = false
 bincode = "1.2.1"
 serde = { version = "1.0", features = ["derive"] }
 stats_alloc = "0.1.8"
-porigon-engine = { path = "../engine" }
+porigon = { path = "../engine" }
 wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
 
 [profile.release]

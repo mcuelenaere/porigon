@@ -1,5 +1,5 @@
 [package]
-name = "porigon-engine"
+name = "porigon"
 version = "0.1.0"
 authors = ["Maurus Cuelenaere <mcuelenaere@gmail.com>"]
 edition = "2018"
