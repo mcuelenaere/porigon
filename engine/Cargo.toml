@@ -2,6 +2,9 @@
 name = "porigon"
 version = "0.1.0"
 authors = ["Maurus Cuelenaere <mcuelenaere@gmail.com>"]
+description = "Lightweight FST-based autocompleter library, targeting WebAssembly and data stored in-memory"
+repository = "https://github.com/mcuelenaere/porigon"
+license = "MIT"
 edition = "2018"
 
 [lib]
