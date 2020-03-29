@@ -2,7 +2,7 @@ extern crate stats_alloc;
 extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
-use porigon::{Searchable, TopScoreCollector};
+use porigon::{Searchable, TopScoreCollector, LevenshteinAutomatonBuilder};
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
@@ -55,6 +55,8 @@ impl SearchData {
 pub struct Searcher {
     data: SearchData,
     collector: TopScoreCollector,
+    levenshtein_builder_1: LevenshteinAutomatonBuilder,
+    levenshtein_builder_2: LevenshteinAutomatonBuilder,
 }
 
 #[derive(Serialize)]
@@ -69,25 +71,53 @@ impl Searcher {
     pub fn new(bytes: Vec<u8>, limit: usize) -> Result<Searcher, JsValue> {
         let data: SearchData = SearchData::from_bytes(bytes).map_err(|err| err_to_js("could not parse data", err))?;
         let collector = TopScoreCollector::new(limit);
-        Ok(Searcher { data, collector })
+        let levenshtein_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
+        let levenshtein_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
+        Ok(Searcher { data, collector, levenshtein_builder_1, levenshtein_builder_2 })
     }
 
     pub fn search(&mut self, query: &str) -> JsValue {
         let ratings = &self.data.ratings;
-        let for_fixed_score = |score: usize| {
-            move |_: &[u8], index: u64, _: usize| score + (*ratings.get(&index).unwrap_or(&0) as usize)
+        let get_rating_for = move |index| {
+            *ratings.get(&index).unwrap_or(&0) as usize
         };
 
-        let s1 = self.data.titles
-            .exact_match(query)
-            .rescore(for_fixed_score(10000));
-        let s2 = self.data.titles
-            .starts_with(query)
-            .rescore(for_fixed_score(0));
-
         self.collector.reset();
-        self.collector.consume_stream(s1);
-        self.collector.consume_stream(s2);
+
+        self.collector.consume_stream(
+            self.data.titles
+                .exact_match(query)
+                .rescore(move |_, index, _| 50000 + get_rating_for(index))
+        );
+        self.collector.consume_stream(
+            self.data.titles
+                .starts_with(query)
+                .rescore(move |_, index, _| 40000 + get_rating_for(index))
+        );
+
+        if query.len() > 3 {
+            // running the levenshtein matchers on short query strings is quite expensive, so don't do that
+            self.collector.consume_stream(
+                self.data.titles
+                    .levenshtein_exact_match(&self.levenshtein_builder_1, query)
+                    .rescore(move |_, index, _| 30000 + get_rating_for(index))
+            );
+            self.collector.consume_stream(
+                self.data.titles
+                    .levenshtein_starts_with(&self.levenshtein_builder_1, query)
+                    .rescore(move |_, index, _| 20000 + get_rating_for(index))
+            );
+            self.collector.consume_stream(
+                self.data.titles
+                    .levenshtein_exact_match(&self.levenshtein_builder_2, query)
+                    .rescore(move |_, index, _| 10000 + get_rating_for(index))
+            );
+            self.collector.consume_stream(
+                self.data.titles
+                    .levenshtein_starts_with(&self.levenshtein_builder_2, query)
+                    .rescore(move |_, index, _| get_rating_for(index))
+            );
+        }
 
         let results: Vec<SearchResult> = self.collector.top_documents()
             .iter()
