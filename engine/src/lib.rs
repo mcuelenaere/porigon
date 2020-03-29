@@ -1,6 +1,7 @@
 use fst::{IntoStreamer, Streamer, Map};
 use fst::automaton::{Automaton, Str, Subsequence};
-pub use levenshtein_automata::LevenshteinAutomatonBuilder;
+pub use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
+use maybe_owned::MaybeOwned;
 use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
 
@@ -75,12 +76,12 @@ impl Searchable {
         self.create_stream(automaton)
     }
 
-    fn levenshtein<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, is_prefix: bool, query: &'a str) -> SearchStream<'a> {
-        let dfa = if is_prefix { builder.build_prefix_dfa(query) } else { builder.build_dfa(query) };
+    pub fn levenshtein<'a, D>(&'a self, dfa: D) -> SearchStream<'a>
+        where D: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
+    {
+        struct Adapter<'a>(MaybeOwned<'a, levenshtein_automata::DFA>);
 
-        struct Adapter(levenshtein_automata::DFA);
-
-        impl fst::Automaton for Adapter {
+        impl<'a> fst::Automaton for Adapter<'a> {
             type State = u32;
 
             fn start(&self) -> u32 {
@@ -89,8 +90,8 @@ impl Searchable {
 
             fn is_match(&self, state: &u32) -> bool {
                 match self.0.distance(*state) {
-                    levenshtein_automata::Distance::Exact(_) => true,
-                    levenshtein_automata::Distance::AtLeast(_) => false,
+                    LevenshteinDistance::Exact(_) => true,
+                    LevenshteinDistance::AtLeast(_) => false,
                 }
             }
 
@@ -103,15 +104,15 @@ impl Searchable {
             }
         }
 
-        self.create_stream(Adapter(dfa))
+        self.create_stream(Adapter(dfa.into()))
     }
 
     pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
-        self.levenshtein(builder, false, query)
+        self.levenshtein(builder.build_dfa(query))
     }
 
     pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
-        self.levenshtein(builder, true, query)
+        self.levenshtein(builder.build_prefix_dfa(query))
     }
 
     pub fn subsequence<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
@@ -310,6 +311,19 @@ mod tests {
         let results = searchable.levenshtein_exact_match(&dfa_builder_2, "bar").into_vec();
         assert_eq!(results.len(), 3);
         assert_eq!(results, vec!(("bar".to_string(), 0, 0), ("baz".to_string(), 1, 0), ("boz".to_string(), 2, 0)));
+
+        let dfa = dfa_builder_2.build_prefix_dfa("bar");
+        let results = searchable
+            .levenshtein(&dfa)
+            .rescore(
+                |key, _, _| match dfa.eval(key) {
+                    LevenshteinDistance::Exact(d) => d as usize,
+                    LevenshteinDistance::AtLeast(_) => 0,
+                }
+            )
+            .into_vec();
+        assert_eq!(results.len(), 3);
+        assert_eq!(results, vec!(("bar".to_string(), 0, 0), ("baz".to_string(), 1, 1), ("boz".to_string(), 2, 2)));
 
         Ok(())
     }
