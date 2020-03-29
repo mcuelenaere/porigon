@@ -80,6 +80,38 @@ impl<'a, F, S> Streamer<'a> for FilteredStream<F, S>
     }
 }
 
+pub struct MappedStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score),
+{
+    mapper: F,
+    wrapped: S,
+}
+
+impl<F, S> MappedStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score),
+{
+    pub fn new(streamer: S, mapper: F) -> Self {
+        Self {
+            mapper,
+            wrapped: streamer,
+        }
+    }
+}
+
+impl<'a, F, S> Streamer<'a> for MappedStream<F, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score),
+{
+    type Item = (&'a [u8], u64, crate::Score);
+
+    fn next(&'a mut self) -> Option<Self::Item> {
+        let mapper_fn = &self.mapper;
+        self.wrapped.next().map(|(key, index, score)| mapper_fn(key, index, score))
+    }
+}
+
 const DUPES_TAG: u64 = (1 << 63);
 
 pub struct DeduplicatedStream<'a, S>

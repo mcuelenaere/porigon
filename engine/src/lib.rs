@@ -23,6 +23,10 @@ impl<'s> SearchStream<'s> {
     pub fn filter<F: 's + Fn(&[u8], u64, crate::Score) -> bool>(self, func: F) -> Self {
         SearchStream(Box::new(streams::FilteredStream::new(self, func)))
     }
+
+    pub fn map<F: 's + Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score)>(self, func: F) -> Self {
+        SearchStream(Box::new(streams::MappedStream::new(self, func)))
+    }
 }
 
 impl<'a, 's> Streamer<'a> for SearchStream<'s> {
@@ -248,6 +252,21 @@ mod tests {
             .into_vec();
         assert_eq!(results.len(), 1);
         assert_eq!(results, vec!(("foobar".to_string(), 2, 0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_map() -> TestResult {
+        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 2), ("foobar".as_bytes(), 3));
+        let searchable = Searchable::build_from_iter(items)?;
+
+        let results = searchable
+            .starts_with("foo")
+            .map(|key, index, score| (key, index * 2, score))
+            .into_vec();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results, vec!(("foo".to_string(), 4, 0), ("foobar".to_string(), 6, 0)));
 
         Ok(())
     }
