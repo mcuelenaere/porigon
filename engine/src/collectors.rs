@@ -1,4 +1,4 @@
-use fst::Streamer;
+use fst::{IntoStreamer, Streamer};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
@@ -48,9 +48,11 @@ impl TopScoreCollector {
         self.heap.clear();
     }
 
-    pub fn consume_stream<S>(&mut self, stream: &mut S)
-        where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>
+    pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
+        where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, crate::Score)>,
+              S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>
     {
+        let mut stream = streamer.into_stream();
         while let Some((_, index, score)) = stream.next() {
             self.process_document(Document { score, index });
         }

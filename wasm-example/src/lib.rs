@@ -78,16 +78,16 @@ impl Searcher {
             move |_: &[u8], index: u64, _: usize| score + (*ratings.get(&index).unwrap_or(&0) as usize)
         };
 
-        let mut s1 = self.data.titles
+        let s1 = self.data.titles
             .exact_match(query)
             .rescore(for_fixed_score(10000));
-        let mut s2 = self.data.titles
+        let s2 = self.data.titles
             .starts_with(query)
             .rescore(for_fixed_score(0));
 
         self.collector.reset();
-        self.collector.consume_stream(&mut s1);
-        self.collector.consume_stream(&mut s2);
+        self.collector.consume_stream(s1);
+        self.collector.consume_stream(s2);
 
         let results: Vec<SearchResult> = self.collector.top_documents()
             .iter()
