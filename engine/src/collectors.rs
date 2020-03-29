@@ -28,6 +28,10 @@ impl PartialEq for Document {
 
 impl Eq for Document {}
 
+/// Documents collector, keeping track of the top N items (based on their score).
+///
+/// Internally, this uses a binary min-heap as an efficient manner of keeping track of the top N
+/// documents.
 pub struct TopScoreCollector {
     // heap should be a min-heap, so use Reverse to achieve this
     heap: BinaryHeap<Reverse<Document>>,
@@ -36,6 +40,7 @@ pub struct TopScoreCollector {
 }
 
 impl TopScoreCollector {
+    /// Constructs a new `TopScoreCollector` with a hardcoded `limit` of documents.
     pub fn new(limit: usize) -> Self {
         TopScoreCollector {
             limit,
@@ -44,10 +49,35 @@ impl TopScoreCollector {
         }
     }
 
+    /// Resets the internal state of the collector.
     pub fn reset(&mut self) {
         self.heap.clear();
     }
 
+    /// Consumes a `fst::Streamer`, collecting the items and only keeping the top N items (based on
+    /// their score).
+    ///
+    /// # Example
+    /// ```
+    /// use porigon::{Searchable, TopScoreCollector};
+    ///
+    /// let searchable = Searchable::build_from_iter(vec!(
+    ///     ("foo".as_bytes(), 1),
+    ///     ("foobar".as_bytes(), 2),
+    /// )).unwrap();
+    /// let mut collector = TopScoreCollector::new(1);
+    ///
+    /// collector.consume_stream(
+    ///     searchable
+    ///         .starts_with("foo")
+    ///         .rescore(|_, index, _| index * 2)
+    /// );
+    /// collector.consume_stream(
+    ///     searchable
+    ///         .exact_match("foobar")
+    /// );
+    /// assert_eq!(collector.top_documents()[0].index, 2);
+    /// ```
     pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
         where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, crate::Score)>,
               S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>
@@ -58,7 +88,7 @@ impl TopScoreCollector {
         }
     }
 
-    pub fn process_document(&mut self, doc: Document) {
+    fn process_document(&mut self, doc: Document) {
         if let Some(Reverse(existing_doc)) = self.heap.iter().find(|other| other.0 == doc) {
             if doc.score > existing_doc.score {
                 // The heap already contains this document, but it has a lower score than
@@ -89,6 +119,7 @@ impl TopScoreCollector {
         }
     }
 
+    /// Returns a slice of the processed top documents, ordered by their score.
     pub fn top_documents(&mut self) -> &[Document] {
         self.sorted_docs.clear();
         while let Some(doc) = self.heap.pop() {

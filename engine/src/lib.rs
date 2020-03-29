@@ -11,20 +11,112 @@ mod collectors;
 mod serialization;
 mod streams;
 
-type Score = u64;
+/// Score type, used for keeping a per-item score in `SearchStream`.
+pub type Score = u64;
 
 type BoxedStream<'f> = Box<dyn for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> + 'f>;
+
+/// FST stream on which various operations can be chained.
 pub struct SearchStream<'s>(BoxedStream<'s>);
 
 impl<'s> SearchStream<'s> {
+    /// Scores a stream, using the given closure.
+    ///
+    /// # Examples
+    ///
+    /// Basic usage:
+    ///
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let searchable = Searchable::build_from_iter(vec!(
+    ///     ("foo".as_bytes(), 0),
+    ///     ("foobar".as_bytes(), 1))
+    /// ).unwrap();
+    /// let mut strm = searchable
+    ///     .starts_with("foo")
+    ///     .rescore(|key, _, _| key.len() as porigon::Score)
+    /// ;
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3)));
+    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, 6)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
+    /// You can also use this to build upon a previously set score:
+    ///
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let searchable = Searchable::build_from_iter(vec!(
+    ///     ("foo".as_bytes(), 0),
+    ///     ("foobar".as_bytes(), 1))
+    /// ).unwrap();
+    /// let mut strm = searchable
+    ///     .starts_with("foo")
+    ///     .rescore(|key, _, _| key.len() as porigon::Score)
+    ///     .rescore(|_, index, old_score| (old_score << 16) | index)
+    /// ;
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3 << 16)));
+    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, (6 << 16) | 1)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
     pub fn rescore<F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score>(self, func: F) -> Self {
         self.map(move |key, index, score| (key, index, func(key, index, score)))
     }
 
+    /// Filters a stream, using the given closure.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let searchable = Searchable::build_from_iter(vec!(
+    ///     ("foo".as_bytes(), 0),
+    ///     ("foobar".as_bytes(), 1))
+    /// ).unwrap();
+    /// let mut strm = searchable
+    ///     .starts_with("foo")
+    ///     .filter(|key, _, _| key != "foobar".as_bytes())
+    /// ;
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
     pub fn filter<F: 's + Fn(&[u8], u64, crate::Score) -> bool>(self, func: F) -> Self {
         SearchStream(Box::new(streams::FilteredStream::new(self, func)))
     }
 
+    /// Maps over a stream, using the given closure.
+    ///
+    /// This more of an advanced method, used for changing the stream's key or index. Most probably
+    /// you want to use [rescore()](#method.rescore) instead.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let mut items = vec!(
+    ///     ("this is a bar".as_bytes(), 15),
+    ///     ("is a bar".as_bytes(), (1 << 32) | 15),
+    ///     ("a bar".as_bytes(), (1 << 32) | 15),
+    ///     ("bar".as_bytes(), (1 << 32) | 15),
+    ///     ("barfoo".as_bytes(), 16)
+    /// );
+    /// items.sort_by_key(|(key, _)| *key);
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let mut strm = searchable
+    ///     .starts_with("bar")
+    ///     .map(|key, index, score| (key, index & !(1 << 32), score))
+    /// ;
+    /// assert_eq!(strm.next(), Some(("bar".as_bytes(), 15, 0)));
+    /// assert_eq!(strm.next(), Some(("barfoo".as_bytes(), 16, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
     pub fn map<F: 's + Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score)>(self, func: F) -> Self {
         SearchStream(Box::new(streams::MappedStream::new(self, func)))
     }
@@ -38,6 +130,12 @@ impl<'a, 's> Streamer<'a> for SearchStream<'s> {
     }
 }
 
+/// Main entry point to building and querying FSTs.
+///
+/// This is a thin wrapper around `fst::Map`, providing easy access to querying it in
+/// various ways (exact_match, starts_with, levenshtein, ...).
+///
+/// NOTE: this struct is serializable
 #[derive(Serialize, Deserialize)]
 pub struct Searchable {
     map: serialization::SerializableMap,
@@ -66,16 +164,80 @@ impl Searchable {
         SearchStream(Box::new(deduped_stream))
     }
 
+    /// Creates a `SearchStream` from a `StartsWith` matcher for the given `query`.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let items = vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("foo".as_bytes(), 2),
+    ///     ("foo_bar".as_bytes(), 3)
+    /// );
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    ///
+    /// let mut strm = searchable.starts_with("foo");
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn starts_with<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Str::new(query).starts_with();
         self.create_stream(automaton)
     }
 
+    /// Creates a `SearchStream` from an `ExactMatch` matcher for the given `query`.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let items = vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("foo".as_bytes(), 2),
+    ///     ("foo_bar".as_bytes(), 3)
+    /// );
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    ///
+    /// let mut strm = searchable.exact_match("foo");
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn exact_match<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Str::new(query);
         self.create_stream(automaton)
     }
 
+    /// Creates a `SearchStream` from a `levenshtein_automata::DFA` matcher.
+    ///
+    /// This method supports both moving the DFA or passing a reference to it.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    ///
+    /// let items = vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("fob".as_bytes(), 2),
+    ///     ("foo".as_bytes(), 3),
+    ///     ("foo_bar".as_bytes(), 4)
+    /// );
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
+    ///
+    /// let dfa = levenshtein_builder.build_dfa("foo");
+    /// let mut strm = searchable.levenshtein(&dfa);
+    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn levenshtein<'a, D>(&'a self, dfa: D) -> SearchStream<'a>
         where D: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
     {
@@ -107,19 +269,92 @@ impl Searchable {
         self.create_stream(Adapter(dfa.into()))
     }
 
+    /// Creates a `SearchStream` for a `LevenshteinAutomatonBuilder` and the given `query`.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    ///
+    /// let items = vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("fob".as_bytes(), 2),
+    ///     ("foo".as_bytes(), 3),
+    ///     ("foo_bar".as_bytes(), 4)
+    /// );
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
+    ///
+    /// let dfa = levenshtein_builder.build_dfa("foo");
+    /// let mut strm = searchable.levenshtein_exact_match(&levenshtein_builder, "foo");
+    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
         self.levenshtein(builder.build_dfa(query))
     }
 
+    /// Creates a `SearchStream` for a `LevenshteinAutomatonBuilder` and the given `query`.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    ///
+    /// let items = vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("fob".as_bytes(), 2),
+    ///     ("foo".as_bytes(), 3),
+    ///     ("foo_bar".as_bytes(), 4)
+    /// );
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
+    ///
+    /// let dfa = levenshtein_builder.build_dfa("foo");
+    /// let mut strm = searchable.levenshtein_starts_with(&levenshtein_builder, "foo");
+    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 4, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
         self.levenshtein(builder.build_prefix_dfa(query))
     }
 
+    /// Creates a `SearchStream` from a `Subsequence` matcher for the given `query`.
+    ///
+    /// # Example
+    /// ```
+    /// use fst::Streamer;
+    /// use porigon::Searchable;
+    ///
+    /// let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
+    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    ///
+    /// let mut strm = searchable.subsequence("fb");
+    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 1, 0)));
+    /// assert_eq!(strm.next(), None);
+    /// ```
+    ///
     pub fn subsequence<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
 
+    /// Construct a Searchable from an `Iterator<Item=(&[u8], u64)>`.
+    ///
+    /// # Example
+    /// ```
+    /// use porigon::Searchable;
+    ///
+    /// let searchable = Searchable::build_from_iter(vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("foo".as_bytes(), 2),
+    /// )).unwrap();
+    /// ```
     pub fn build_from_iter<'a, I>(iter: I) -> Result<Searchable, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
         // group items by key
         let (deduped_iter, duplicates) = streams::dedupe_from_iter(iter);
