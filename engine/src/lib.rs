@@ -11,7 +11,7 @@ mod collectors;
 mod serialization;
 mod streams;
 
-type Score = usize;
+type Score = u64;
 
 type BoxedStream<'f> = Box<dyn for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> + 'f>;
 pub struct SearchStream<'s>(BoxedStream<'s>);
@@ -223,12 +223,12 @@ mod tests {
         let searchable = Searchable::build_from_iter(items)?;
 
         // use key
-        let results = searchable.starts_with("foo").rescore(|key, _, _| key.len()).into_vec();
+        let results = searchable.starts_with("foo").rescore(|key, _, _| key.len() as u64).into_vec();
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec!(("foo".to_string(), 0, 3), ("foobar".to_string(), 2, 6)));
 
         // use index
-        let results = searchable.starts_with("foo").rescore(|_, idx, _| (idx * 2) as usize).into_vec();
+        let results = searchable.starts_with("foo").rescore(|_, idx, _| (idx * 2) as u64).into_vec();
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 4)));
 
@@ -317,7 +317,7 @@ mod tests {
             .levenshtein(&dfa)
             .rescore(
                 |key, _, _| match dfa.eval(key) {
-                    LevenshteinDistance::Exact(d) => d as usize,
+                    LevenshteinDistance::Exact(d) => d as u64,
                     LevenshteinDistance::AtLeast(_) => 0,
                 }
             )

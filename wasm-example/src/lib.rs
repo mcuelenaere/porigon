@@ -62,7 +62,7 @@ pub struct Searcher {
 #[derive(Serialize)]
 pub struct SearchResult {
     pub index: u64,
-    pub score: usize,
+    pub score: u64,
 }
 
 #[wasm_bindgen]
@@ -79,7 +79,7 @@ impl Searcher {
     pub fn search(&mut self, query: &str) -> JsValue {
         let ratings = &self.data.ratings;
         let get_rating_for = move |index| {
-            *ratings.get(&index).unwrap_or(&0) as usize
+            *ratings.get(&index).unwrap_or(&0) as u64
         };
 
         self.collector.reset();
