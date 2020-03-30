@@ -7,6 +7,12 @@ Lightweight FST-based autocompleter library written in Rust, targeting WebAssemb
 
 Licensed under MIT.
 
+### Intended usecase
+
+The idea of this library is to have a lightweight, yet idiomatic API around the [fst crate](https://github.com/BurntSushi/fst) that allows you to construct, serialize/deserialize and query FSTs in an WebAssembly environment. It's an ideal starting point for building an autocompleter service that can be used on the web, the edge (eg Cloudflare Worker) or the backend-side (node.js).
+
+Existing solutions like eg [tantivy](https://github.com/tantivy-search/tantivy) are not fitting as they're too heavyweight (wasm binary size is over 1MB) or not compilable to WebAssembly. If you're looking for a more full fledged full-text search engine, take a look at the list of alternatives at the bottom.
+
 
 ### Documentation
 
@@ -53,3 +59,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Check out the documentation or `wasm-example` for a more examples.
+
+### Alternatives
+
+If you're looking for a more general-purpose full-text search engine, take a look at these alternatives:
+
+ - https://github.com/tantivy-search/tantivy
+ - https://github.com/meilisearch/MeiliSearch
+ - https://github.com/toshi-search/Toshi
