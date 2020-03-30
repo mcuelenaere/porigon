@@ -346,6 +346,12 @@ impl Searchable {
 
     /// Construct a Searchable from an `Iterator<Item=(&[u8], u64)>`.
     ///
+    /// This expects the items to be pre-sorted in lexicographic order. If not, an error will be
+    /// returned.
+    ///
+    /// This method can handle duplicate keys, but at the loss of a single bit of precision in the
+    /// output values (the highest bit is reserved to tag an item as being duplicate).
+    ///
     /// # Example
     /// ```
     /// use porigon::Searchable;
