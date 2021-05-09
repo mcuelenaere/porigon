@@ -2,8 +2,8 @@ extern crate stats_alloc;
 extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
-use porigon::{Searchable, TopScoreCollector, LevenshteinAutomatonBuilder};
 use serde::{Serialize, Deserialize};
+use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use std::alloc::System;
@@ -37,7 +37,7 @@ fn err_to_js<D: std::fmt::Display>(prefix: &'static str, displayable: D) -> JsVa
 
 #[derive(Serialize, Deserialize)]
 struct SearchData {
-    titles: Searchable,
+    titles: SearchableStorage,
     ratings: HashMap<u64, u32>,
 }
 
@@ -82,15 +82,17 @@ impl Searcher {
             *ratings.get(&index).unwrap_or(&0) as u64
         };
 
+        let titles = self.data.titles.as_searchable().unwrap();
+
         self.collector.reset();
 
         self.collector.consume_stream(
-            self.data.titles
+            titles
                 .exact_match(query)
                 .rescore(move |_, index, _| 50000 + get_rating_for(index))
         );
         self.collector.consume_stream(
-            self.data.titles
+            titles
                 .starts_with(query)
                 .rescore(move |_, index, _| 40000 + get_rating_for(index))
         );
@@ -98,22 +100,22 @@ impl Searcher {
         if query.len() > 3 {
             // running the levenshtein matchers on short query strings is quite expensive, so don't do that
             self.collector.consume_stream(
-                self.data.titles
+                titles
                     .levenshtein_exact_match(&self.levenshtein_builder_1, query)
                     .rescore(move |_, index, _| 30000 + get_rating_for(index))
             );
             self.collector.consume_stream(
-                self.data.titles
+                titles
                     .levenshtein_starts_with(&self.levenshtein_builder_1, query)
                     .rescore(move |_, index, _| 20000 + get_rating_for(index))
             );
             self.collector.consume_stream(
-                self.data.titles
+                titles
                     .levenshtein_exact_match(&self.levenshtein_builder_2, query)
                     .rescore(move |_, index, _| 10000 + get_rating_for(index))
             );
             self.collector.consume_stream(
-                self.data.titles
+                titles
                     .levenshtein_starts_with(&self.levenshtein_builder_2, query)
                     .rescore(move |_, index, _| get_rating_for(index))
             );
@@ -140,7 +142,7 @@ pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
     let build_searchable = |input: Vec<(u64, String)>| {
         let mut i: Vec<(&[u8], u64)> = input.iter().map(|(key, val)| (val.as_bytes(), *key)).collect();
         i.sort_by_key(|(key, _)| *key);
-        Searchable::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
+        SearchableStorage::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };
     let search_data = SearchData {
         titles: build_searchable(data.titles)?,

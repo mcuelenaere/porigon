@@ -2,13 +2,12 @@ use fst::{IntoStreamer, Streamer, Map};
 use fst::automaton::{Automaton, Str, Subsequence};
 pub use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
-use serde::{Serialize, Deserialize};
 use std::collections::HashMap;
+use streams::{DeduplicatedStream, DuplicatesLookup};
 
 pub use self::collectors::TopScoreCollector;
 
 mod collectors;
-mod serialization;
 mod streams;
 
 /// Score type, used for keeping a per-item score in `SearchStream`.
@@ -28,12 +27,13 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
-    /// let searchable = Searchable::build_from_iter(vec!(
+    /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
@@ -47,12 +47,13 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
-    /// let searchable = Searchable::build_from_iter(vec!(
+    /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
@@ -72,12 +73,13 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
-    /// let searchable = Searchable::build_from_iter(vec!(
+    /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .filter(|key, _, _| key != "foobar".as_bytes())
@@ -98,7 +100,7 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
     /// let mut items = vec!(
     ///     ("this is a bar".as_bytes(), 15),
@@ -108,7 +110,8 @@ impl<'s> SearchStream<'s> {
     ///     ("barfoo".as_bytes(), 16)
     /// );
     /// items.sort_by_key(|(key, _)| *key);
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("bar")
     ///     .map(|key, index, score| (key, index & !(1 << 32), score))
@@ -130,19 +133,75 @@ impl<'a, 's> Streamer<'a> for SearchStream<'s> {
     }
 }
 
-/// Main entry point to building and querying FSTs.
-///
-/// This is a thin wrapper around `fst::Map`, providing easy access to querying it in
-/// various ways (exact_match, starts_with, levenshtein, ...).
+/// Structure that contains all underlying data needed to construct a `Searchable`.
 ///
 /// NOTE: this struct is serializable
-#[derive(Serialize, Deserialize)]
-pub struct Searchable {
-    map: serialization::SerializableMap,
+#[cfg_attr(feature = "serde_support", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "rkyv_support", derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize))]
+pub struct SearchableStorage {
+    fst_data: Vec<u8>,
     duplicates: HashMap<u64, Vec<u64>>,
 }
 
-impl Searchable {
+#[cfg(feature = "rkyv_support")]
+impl ArchivedSearchableStorage {
+    pub fn as_searchable(&self) -> Result<Searchable<rkyv::std_impl::chd::ArchivedHashMap<u64, rkyv::std_impl::ArchivedVec<u64>>>, fst::Error> {
+        Ok(Searchable {
+            map: Map::new(self.fst_data.as_slice())?,
+            duplicates: &self.duplicates,
+        })
+    }
+}
+
+impl SearchableStorage {
+    pub fn as_searchable(&self) -> Result<Searchable<HashMap<u64, Vec<u64>>>, fst::Error> {
+        Ok(Searchable {
+            map: Map::new(self.fst_data.as_slice())?,
+            duplicates: &self.duplicates,
+        })
+    }
+
+    /// Construct a Searchable from an `Iterator<Item=(&[u8], u64)>`.
+    ///
+    /// This expects the items to be pre-sorted in lexicographic order. If not, an error will be
+    /// returned.
+    ///
+    /// This method can handle duplicate keys, but at the loss of a single bit of precision in the
+    /// output values (the highest bit is reserved to tag an item as being duplicate).
+    ///
+    /// # Example
+    /// ```
+    /// use porigon::SearchableStorage;
+    ///
+    /// let searchable = SearchableStorage::build_from_iter(vec!(
+    ///     ("bar".as_bytes(), 1),
+    ///     ("foo".as_bytes(), 2),
+    /// )).unwrap();
+    /// ```
+    pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
+        // group items by key
+        let (deduped_iter, duplicates) = streams::dedupe_from_iter(iter);
+
+        // build map
+        let map = Map::from_iter(deduped_iter)?;
+
+        Ok(Self {
+            fst_data: map.into_fst().into_inner(),
+            duplicates,
+        })
+    }
+}
+
+/// Main entry point to querying FSTs.
+///
+/// This is a thin wrapper around `fst::Map`, providing easy access to querying it in
+/// various ways (exact_match, starts_with, levenshtein, ...).
+pub struct Searchable<'a, D: DuplicatesLookup> {
+    map: Map<&'a [u8]>,
+    duplicates: &'a D,
+}
+
+impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> SearchStream<'a>
         where A: Automaton
     {
@@ -159,8 +218,8 @@ impl Searchable {
             }
         }
 
-        let stream = self.map.as_ref().search(automaton).into_stream();
-        let deduped_stream = streams::DeduplicatedStream::new(Adapter(stream), &self.duplicates);
+        let stream = self.map.search(automaton).into_stream();
+        let deduped_stream = DeduplicatedStream::new(Adapter(stream), self.duplicates);
         SearchStream(Box::new(deduped_stream))
     }
 
@@ -169,14 +228,15 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
     /// let items = vec!(
     ///     ("bar".as_bytes(), 1),
     ///     ("foo".as_bytes(), 2),
     ///     ("foo_bar".as_bytes(), 3)
     /// );
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     ///
     /// let mut strm = searchable.starts_with("foo");
     /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
@@ -194,14 +254,15 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
     /// let items = vec!(
     ///     ("bar".as_bytes(), 1),
     ///     ("foo".as_bytes(), 2),
     ///     ("foo_bar".as_bytes(), 3)
     /// );
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     ///
     /// let mut strm = searchable.exact_match("foo");
     /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
@@ -220,7 +281,7 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
     ///     ("bar".as_bytes(), 1),
@@ -228,7 +289,8 @@ impl Searchable {
     ///     ("foo".as_bytes(), 3),
     ///     ("foo_bar".as_bytes(), 4)
     /// );
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
@@ -238,8 +300,8 @@ impl Searchable {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein<'a, D>(&'a self, dfa: D) -> SearchStream<'a>
-        where D: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
+    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> SearchStream<'a>
+        where DFA: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
     {
         struct Adapter<'a>(MaybeOwned<'a, levenshtein_automata::DFA>);
 
@@ -274,7 +336,7 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
     ///     ("bar".as_bytes(), 1),
@@ -282,7 +344,8 @@ impl Searchable {
     ///     ("foo".as_bytes(), 3),
     ///     ("foo_bar".as_bytes(), 4)
     /// );
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
@@ -301,7 +364,7 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::{LevenshteinAutomatonBuilder, Searchable};
+    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
     ///     ("bar".as_bytes(), 1),
@@ -309,7 +372,8 @@ impl Searchable {
     ///     ("foo".as_bytes(), 3),
     ///     ("foo_bar".as_bytes(), 4)
     /// );
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let levenshtein_builder = LevenshteinAutomatonBuilder::new(1, false);
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
@@ -329,10 +393,11 @@ impl Searchable {
     /// # Example
     /// ```
     /// use fst::Streamer;
-    /// use porigon::Searchable;
+    /// use porigon::SearchableStorage;
     ///
     /// let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
-    /// let searchable = Searchable::build_from_iter(items).unwrap();
+    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     ///
     /// let mut strm = searchable.subsequence("fb");
     /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 1, 0)));
@@ -343,36 +408,6 @@ impl Searchable {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
-
-    /// Construct a Searchable from an `Iterator<Item=(&[u8], u64)>`.
-    ///
-    /// This expects the items to be pre-sorted in lexicographic order. If not, an error will be
-    /// returned.
-    ///
-    /// This method can handle duplicate keys, but at the loss of a single bit of precision in the
-    /// output values (the highest bit is reserved to tag an item as being duplicate).
-    ///
-    /// # Example
-    /// ```
-    /// use porigon::Searchable;
-    ///
-    /// let searchable = Searchable::build_from_iter(vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("foo".as_bytes(), 2),
-    /// )).unwrap();
-    /// ```
-    pub fn build_from_iter<'a, I>(iter: I) -> Result<Searchable, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
-        // group items by key
-        let (deduped_iter, duplicates) = streams::dedupe_from_iter(iter);
-
-        // build map
-        let map = Map::from_iter(deduped_iter)?;
-
-        Ok(Self {
-            map: map.into(),
-            duplicates,
-        })
-    }
 }
 
 #[cfg(test)]
@@ -381,7 +416,11 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    impl<'a> SearchStream<'a>
+    trait SearchStreamIntoVec {
+        fn into_vec(self) -> Vec<(String, u64, Score)>;
+    }
+
+    impl<'a, S: SearchStream<'a>> SearchStreamIntoVec for S
     {
         fn into_vec(mut self) -> Vec<(String, u64, Score)> {
             let mut items = Vec::new();
@@ -395,8 +434,8 @@ mod tests {
     #[test]
     fn test_build() -> TestResult {
         let items = vec!(("bar".as_bytes(), 1), ("foo".as_bytes(), 0));
-        let searchable = Searchable::build_from_iter(items)?;
-        let results = searchable.map.as_ref().stream().into_str_vec()?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let results = storage.as_searchable()?.map.as_ref().stream().into_str_vec()?;
         assert_eq!(results.len(), 2);
         assert_eq!(results, vec![("bar".to_string(), 1), ("foo".to_string(), 0)]);
         Ok(())
@@ -405,7 +444,8 @@ mod tests {
     #[test]
     fn test_searchable_exact_match() -> TestResult {
         let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         // negative match
         let results = searchable.exact_match("bar").into_vec();
@@ -422,7 +462,8 @@ mod tests {
     #[test]
     fn test_searchable_starts_with() -> TestResult {
         let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         // negative match
         let results = searchable.starts_with("b").into_vec();
@@ -439,7 +480,8 @@ mod tests {
     #[test]
     fn test_searchable_subsequence() -> TestResult {
         let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         // negative match
         let results = searchable.subsequence("m").into_vec();
@@ -461,7 +503,8 @@ mod tests {
     #[test]
     fn test_scored_stream() -> TestResult {
         let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         // use key
         let results = searchable.starts_with("foo").rescore(|key, _, _| key.len() as u64).into_vec();
@@ -479,7 +522,8 @@ mod tests {
     #[test]
     fn test_filter() -> TestResult {
         let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         let results = searchable
             .starts_with("foo")
@@ -501,7 +545,8 @@ mod tests {
     #[test]
     fn test_map() -> TestResult {
         let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 2), ("foobar".as_bytes(), 3));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         let results = searchable
             .starts_with("foo")
@@ -516,7 +561,8 @@ mod tests {
     #[test]
     fn test_duplicates() -> TestResult {
         let items = vec!(("foo".as_bytes(), 0), ("foo".as_bytes(), 1), ("foobar".as_bytes(), 2));
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
 
         let results = searchable.exact_match("foo").into_vec();
         assert_eq!(results.len(), 2);
@@ -537,7 +583,8 @@ mod tests {
             ("foobar".as_bytes(), 6),
             ("something else".as_bytes(), 7),
         );
-        let searchable = Searchable::build_from_iter(items)?;
+        let storage = SearchableStorage::build_from_iter(items)?;
+        let searchable = storage.as_searchable()?;
         let dfa_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
         let dfa_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
 

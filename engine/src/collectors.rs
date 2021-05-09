@@ -61,10 +61,11 @@ impl TopScoreCollector {
     /// ```
     /// use porigon::{Searchable, TopScoreCollector};
     ///
-    /// let searchable = Searchable::build_from_iter(vec!(
+    /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 1),
     ///     ("foobar".as_bytes(), 2),
     /// )).unwrap();
+    /// let searchable = storage.as_searchable().unwrap();
     /// let mut collector = TopScoreCollector::new(1);
     ///
     /// collector.consume_stream(

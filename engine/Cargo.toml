@@ -15,4 +15,9 @@ fst = { version = "0.4.0", default-features = false }
 levenshtein_automata = "0.2.0"
 itertools = "0.10.0"
 maybe-owned = "0.3.2"
-serde = { version = "1.0", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"], optional = true }
+rkyv = { version = "0.6.4", optional = true }
+
+[features]
+serde_support = [ "serde" ]
+rkyv_support = [ "rkyv" ]

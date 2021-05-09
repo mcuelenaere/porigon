@@ -80,22 +80,41 @@ impl<'a, F, S> Streamer<'a> for MappedStream<F, S>
     }
 }
 
-const DUPES_TAG: u64 = (1 << 63);
+pub trait DuplicatesLookup {
+    fn get(&self, key: u64) -> Option<&[u64]>;
+}
 
-pub struct DeduplicatedStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>
+impl DuplicatesLookup for HashMap<u64, Vec<u64>> {
+    fn get(&self, key: u64) -> Option<&[u64]> {
+        self.get(&key).map(|values| values.as_slice())
+    }
+}
+
+#[cfg(feature = "rkyv_support")]
+impl DuplicatesLookup for rkyv::std_impl::chd::ArchivedHashMap<u64, rkyv::std_impl::ArchivedVec<u64>> {
+    fn get(&self, key: u64) -> Option<&[u64]> {
+        self.get(&key).map(|values| values.as_slice())
+    }
+}
+
+const DUPES_TAG: u64 = 1 << 63;
+
+pub struct DeduplicatedStream<'a, S, D>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          D: DuplicatesLookup
 {
     cur_key: Vec<u8>,
     cur_iter: Option<std::slice::Iter<'a, u64>>,
     cur_score: crate::Score,
-    duplicates: &'a HashMap<u64, Vec<u64>>,
+    duplicates: &'a D,
     wrapped: S,
 }
 
-impl<'a, S> DeduplicatedStream<'a, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>
+impl<'a, S, D> DeduplicatedStream<'a, S, D>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          D: DuplicatesLookup
 {
-    pub fn new(streamer: S, duplicates: &'a HashMap<u64, Vec<u64>>) -> Self {
+    pub fn new(streamer: S, duplicates: &'a D) -> Self {
         Self {
             cur_key: Vec::new(),
             cur_iter: None,
@@ -106,8 +125,9 @@ impl<'a, S> DeduplicatedStream<'a, S>
     }
 }
 
-impl<'a, 'b, S> Streamer<'a> for DeduplicatedStream<'b, S>
-    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64, crate::Score)>
+impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
+    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64, crate::Score)>,
+          D: DuplicatesLookup
 {
     type Item = (&'a [u8], u64, crate::Score);
 
@@ -126,7 +146,7 @@ impl<'a, 'b, S> Streamer<'a> for DeduplicatedStream<'b, S>
         match self.wrapped.next() {
             Some((key, index, score)) => {
                 if index & DUPES_TAG != 0 {
-                    let dupes = match self.duplicates.get(&(index ^ DUPES_TAG)) {
+                    let dupes = match self.duplicates.get(index ^ DUPES_TAG) {
                         Some(x) => x,
                         None => return None,
                     };
