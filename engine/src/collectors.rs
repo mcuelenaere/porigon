@@ -1,10 +1,11 @@
+use crate::Score;
 use fst::{IntoStreamer, Streamer};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
 pub struct Document {
     pub index: u64,
-    pub score: crate::Score,
+    pub score: Score,
 }
 
 impl PartialOrd for Document {
@@ -80,8 +81,8 @@ impl TopScoreCollector {
     /// assert_eq!(collector.top_documents()[0].index, 2);
     /// ```
     pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
-        where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, crate::Score)>,
-              S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>
+        where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, Score)>,
+              S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
     {
         let mut stream = streamer.into_stream();
         while let Some((_, index, score)) = stream.next() {
@@ -139,12 +140,12 @@ mod tests {
     fn test_collector() {
         let mut collector = TopScoreCollector::new(5);
         for i in 0..10 {
-            collector.process_document(Document { index: i, score: (i as crate::Score) });
+            collector.process_document(Document { index: i, score: (i as Score) });
         }
         let top_docs = collector.top_documents();
 
         // check scores
-        let scores: Vec<crate::Score> = top_docs.iter().map(|doc| doc.score).collect();
+        let scores: Vec<Score> = top_docs.iter().map(|doc| doc.score).collect();
         assert_eq!(scores, vec!(9, 8, 7, 6, 5));
 
         // check indices
@@ -156,15 +157,15 @@ mod tests {
     fn test_collector_duplicates() {
         let mut collector = TopScoreCollector::new(7);
         for i in 0..10 {
-            collector.process_document(Document { index: i, score: (i as crate::Score) });
+            collector.process_document(Document { index: i, score: (i as Score) });
         }
-        collector.process_document(Document { index: 3, score: 6 as crate::Score });
-        collector.process_document(Document { index: 6, score: 2 as crate::Score });
-        collector.process_document(Document { index: 2, score: 8 as crate::Score });
+        collector.process_document(Document { index: 3, score: 6 as Score });
+        collector.process_document(Document { index: 6, score: 2 as Score });
+        collector.process_document(Document { index: 2, score: 8 as Score });
         let top_docs = collector.top_documents();
 
         // check scores
-        let scores: Vec<crate::Score> = top_docs.iter().map(|doc| doc.score).collect();
+        let scores: Vec<Score> = top_docs.iter().map(|doc| doc.score).collect();
         assert_eq!(scores, vec!(9, 8, 8, 7, 6, 6, 5));
 
         // check indices
