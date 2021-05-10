@@ -2,8 +2,8 @@ extern crate stats_alloc;
 extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
-use serde::{Serialize, Deserialize};
 use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
+use rkyv::{Archive, Serialize, AlignedVec, archived_root, ser::{serializers::AlignedSerializer, Serializer}};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use std::alloc::System;
@@ -11,7 +11,7 @@ use std::alloc::System;
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 pub struct MemoryStats {
     pub allocations: usize,
     pub deallocations: usize,
@@ -35,31 +35,35 @@ fn err_to_js<D: std::fmt::Display>(prefix: &'static str, displayable: D) -> JsVa
     JsValue::from(format!("{}: {}", prefix, displayable))
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Archive, Serialize)]
 struct SearchData {
     titles: SearchableStorage,
     ratings: HashMap<u64, u32>,
 }
 
-impl SearchData {
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, bincode::Error> {
-        bincode::deserialize(bytes.as_slice())
+impl ArchivedSearchData {
+    pub fn from_bytes(bytes: &Vec<u8>) -> &Self {
+        unsafe { archived_root::<SearchData>(bytes.as_slice()) }
     }
+}
 
-    pub fn to_bytes(&self) -> Result<Vec<u8>, bincode::Error> {
-        bincode::serialize(&self)
+impl SearchData {
+    pub fn to_bytes(&self) -> Vec<u8> {
+        let mut serializer = AlignedSerializer::new(AlignedVec::new());
+        serializer.serialize_value(self).unwrap();
+        serializer.into_inner().into_vec()
     }
 }
 
 #[wasm_bindgen]
 pub struct Searcher {
-    data: SearchData,
+    data: Vec<u8>,
     collector: TopScoreCollector,
     levenshtein_builder_1: LevenshteinAutomatonBuilder,
     levenshtein_builder_2: LevenshteinAutomatonBuilder,
 }
 
-#[derive(Serialize)]
+#[derive(serde::Serialize)]
 pub struct SearchResult {
     pub index: u64,
     pub score: u64,
@@ -68,8 +72,7 @@ pub struct SearchResult {
 #[wasm_bindgen]
 impl Searcher {
     #[wasm_bindgen(constructor)]
-    pub fn new(bytes: Vec<u8>, limit: usize) -> Result<Searcher, JsValue> {
-        let data: SearchData = SearchData::from_bytes(bytes).map_err(|err| err_to_js("could not parse data", err))?;
+    pub fn new(data: Vec<u8>, limit: usize) -> Result<Searcher, JsValue> {
         let collector = TopScoreCollector::new(limit);
         let levenshtein_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
         let levenshtein_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
@@ -77,12 +80,13 @@ impl Searcher {
     }
 
     pub fn search(&mut self, query: &str) -> JsValue {
-        let ratings = &self.data.ratings;
+        let data = ArchivedSearchData::from_bytes(&self.data);
+        let ratings = &data.ratings;
         let get_rating_for = move |index| {
             *ratings.get(&index).unwrap_or(&0) as u64
         };
 
-        let titles = self.data.titles.as_searchable().unwrap();
+        let titles = data.titles.as_searchable().unwrap();
 
         self.collector.reset();
 
@@ -130,7 +134,7 @@ impl Searcher {
     }
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize)]
 pub struct BuildData {
     titles: Vec<(u64, String)>,
     ratings: HashMap<u64, u32>,
@@ -148,5 +152,5 @@ pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
         titles: build_searchable(data.titles)?,
         ratings: data.ratings,
     };
-    search_data.to_bytes().map_err(|err| err_to_js("could not serialize search data", err))
+    Ok(search_data.to_bytes())
 }
