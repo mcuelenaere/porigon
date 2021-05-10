@@ -3,7 +3,8 @@ use fst::automaton::{Automaton, Str, Subsequence};
 pub use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
 use std::collections::HashMap;
-use streams::{DeduplicatedStream, DuplicatesLookup, MappedStream, FilteredStream, RescoredStream};
+use streams::{DeduplicatedStream, DuplicatesLookup};
+pub use streams::SearchStream;
 pub use self::collectors::TopScoreCollector;
 
 mod collectors;
@@ -11,128 +12,6 @@ mod streams;
 
 /// Score type, used for keeping a per-item score in `SearchStream`.
 pub type Score = u64;
-
-/// FST stream on which various operations can be chained.
-pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
-    /// Scores a stream, using the given closure.
-    ///
-    /// # Examples
-    ///
-    /// Basic usage:
-    ///
-    /// ```
-    /// use fst::Streamer;
-    /// use porigon::{SearchableStorage, SearchStream};
-    ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
-    /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
-    /// let mut strm = searchable
-    ///     .starts_with("foo")
-    ///     .rescore(|key, _, _| key.len() as porigon::Score)
-    /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3)));
-    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, 6)));
-    /// assert_eq!(strm.next(), None);
-    /// ```
-    ///
-    /// You can also use this to build upon a previously set score:
-    ///
-    /// ```
-    /// use fst::Streamer;
-    /// use porigon::{SearchableStorage, SearchStream};
-    ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
-    /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
-    /// let mut strm = searchable
-    ///     .starts_with("foo")
-    ///     .rescore(|key, _, _| key.len() as porigon::Score)
-    ///     .rescore(|_, index, old_score| (old_score << 16) | index)
-    /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3 << 16)));
-    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, (6 << 16) | 1)));
-    /// assert_eq!(strm.next(), None);
-    /// ```
-    fn rescore<F>(self, func: F) -> RescoredStream<F, Self>
-        where F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score,
-              Self: Sized
-    {
-        RescoredStream::new(self, func)
-    }
-
-    /// Filters a stream, using the given closure.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use fst::Streamer;
-    /// use porigon::{SearchableStorage, SearchStream};
-    ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
-    /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
-    /// let mut strm = searchable
-    ///     .starts_with("foo")
-    ///     .filter(|key, _, _| key != "foobar".as_bytes())
-    /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 0)));
-    /// assert_eq!(strm.next(), None);
-    /// ```
-    fn filter<F>(self, func: F) -> FilteredStream<F, Self>
-        where F: 's + Fn(&[u8], u64, crate::Score) -> bool,
-              Self: Sized
-    {
-        FilteredStream::new(self, func)
-    }
-
-    /// Maps over a stream, using the given closure.
-    ///
-    /// This more of an advanced method, used for changing the stream's key or index. Most probably
-    /// you want to use [rescore()](#method.rescore) instead.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use fst::Streamer;
-    /// use porigon::{SearchableStorage, SearchStream};
-    ///
-    /// let mut items = vec!(
-    ///     ("this is a bar".as_bytes(), 15),
-    ///     ("is a bar".as_bytes(), (1 << 32) | 15),
-    ///     ("a bar".as_bytes(), (1 << 32) | 15),
-    ///     ("bar".as_bytes(), (1 << 32) | 15),
-    ///     ("barfoo".as_bytes(), 16)
-    /// );
-    /// items.sort_by_key(|(key, _)| *key);
-    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
-    /// let mut strm = searchable
-    ///     .starts_with("bar")
-    ///     .map(|key, index, score| (key, index & !(1 << 32), score))
-    /// ;
-    /// assert_eq!(strm.next(), Some(("bar".as_bytes(), 15, 0)));
-    /// assert_eq!(strm.next(), Some(("barfoo".as_bytes(), 16, 0)));
-    /// assert_eq!(strm.next(), None);
-    /// ```
-    fn map<F>(self, func: F) -> MappedStream<F, Self>
-        where F: 's + Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score),
-              Self: Sized
-    {
-        MappedStream::new(self, func)
-    }
-}
-
-impl<'s, S> SearchStream<'s> for S
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
-{
-}
 
 /// Structure that contains all underlying data needed to construct a `Searchable`.
 ///
