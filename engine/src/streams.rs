@@ -80,6 +80,38 @@ impl<'a, F, S> Streamer<'a> for MappedStream<F, S>
     }
 }
 
+pub struct RescoredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score,
+{
+    scorer: F,
+    wrapped: S,
+}
+
+impl<F, S> RescoredStream<F, S>
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score,
+{
+    pub fn new(streamer: S, scorer: F) -> Self {
+        Self {
+            scorer,
+            wrapped: streamer,
+        }
+    }
+}
+
+impl<'a, F, S> Streamer<'a> for RescoredStream<F, S>
+    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, crate::Score)>,
+          F: Fn(&[u8], u64, crate::Score) -> crate::Score,
+{
+    type Item = (&'a [u8], u64, crate::Score);
+
+    fn next(&'a mut self) -> Option<Self::Item> {
+        let scorer_fn = &self.scorer;
+        self.wrapped.next().map(|(key, index, score)| (key, index, scorer_fn(key, index, score)))
+    }
+}
+
 pub trait DuplicatesLookup {
     fn get(&self, key: u64) -> Option<&[u64]>;
 }

@@ -3,7 +3,7 @@ extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
 use serde::{Serialize, Deserialize};
-use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage};
+use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use std::alloc::System;

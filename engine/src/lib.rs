@@ -3,8 +3,7 @@ use fst::automaton::{Automaton, Str, Subsequence};
 pub use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
 use std::collections::HashMap;
-use streams::{DeduplicatedStream, DuplicatesLookup};
-
+use streams::{DeduplicatedStream, DuplicatesLookup, MappedStream, FilteredStream, RescoredStream};
 pub use self::collectors::TopScoreCollector;
 
 mod collectors;
@@ -13,12 +12,8 @@ mod streams;
 /// Score type, used for keeping a per-item score in `SearchStream`.
 pub type Score = u64;
 
-type BoxedStream<'f> = Box<dyn for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> + 'f>;
-
 /// FST stream on which various operations can be chained.
-pub struct SearchStream<'s>(BoxedStream<'s>);
-
-impl<'s> SearchStream<'s> {
+pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// Scores a stream, using the given closure.
     ///
     /// # Examples
@@ -27,7 +22,7 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::SearchableStorage;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
@@ -47,7 +42,7 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::SearchableStorage;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
@@ -63,8 +58,11 @@ impl<'s> SearchStream<'s> {
     /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, (6 << 16) | 1)));
     /// assert_eq!(strm.next(), None);
     /// ```
-    pub fn rescore<F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score>(self, func: F) -> Self {
-        self.map(move |key, index, score| (key, index, func(key, index, score)))
+    fn rescore<F>(self, func: F) -> RescoredStream<F, Self>
+        where F: 's + Fn(&[u8], u64, crate::Score) -> crate::Score,
+              Self: Sized
+    {
+        RescoredStream::new(self, func)
     }
 
     /// Filters a stream, using the given closure.
@@ -73,7 +71,7 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::SearchableStorage;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
     ///     ("foo".as_bytes(), 0),
@@ -87,8 +85,11 @@ impl<'s> SearchStream<'s> {
     /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
-    pub fn filter<F: 's + Fn(&[u8], u64, crate::Score) -> bool>(self, func: F) -> Self {
-        SearchStream(Box::new(streams::FilteredStream::new(self, func)))
+    fn filter<F>(self, func: F) -> FilteredStream<F, Self>
+        where F: 's + Fn(&[u8], u64, crate::Score) -> bool,
+              Self: Sized
+    {
+        FilteredStream::new(self, func)
     }
 
     /// Maps over a stream, using the given closure.
@@ -100,7 +101,7 @@ impl<'s> SearchStream<'s> {
     ///
     /// ```
     /// use fst::Streamer;
-    /// use porigon::SearchableStorage;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let mut items = vec!(
     ///     ("this is a bar".as_bytes(), 15),
@@ -120,17 +121,17 @@ impl<'s> SearchStream<'s> {
     /// assert_eq!(strm.next(), Some(("barfoo".as_bytes(), 16, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
-    pub fn map<F: 's + Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score)>(self, func: F) -> Self {
-        SearchStream(Box::new(streams::MappedStream::new(self, func)))
+    fn map<F>(self, func: F) -> MappedStream<F, Self>
+        where F: 's + Fn(&[u8], u64, crate::Score) -> (&[u8], u64, crate::Score),
+              Self: Sized
+    {
+        MappedStream::new(self, func)
     }
 }
 
-impl<'a, 's> Streamer<'a> for SearchStream<'s> {
-    type Item = (&'a [u8], u64, Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
-        self.0.next()
-    }
+impl<'s, S> SearchStream<'s> for S
+    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
+{
 }
 
 /// Structure that contains all underlying data needed to construct a `Searchable`.
@@ -202,7 +203,7 @@ pub struct Searchable<'a, D: DuplicatesLookup> {
 }
 
 impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
-    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> SearchStream<'a>
+    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> impl SearchStream<'a>
         where A: Automaton
     {
         struct Adapter<'m, A>(fst::map::Stream<'m, A>)
@@ -219,8 +220,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
         }
 
         let stream = self.map.search(automaton).into_stream();
-        let deduped_stream = DeduplicatedStream::new(Adapter(stream), self.duplicates);
-        SearchStream(Box::new(deduped_stream))
+        DeduplicatedStream::new(Adapter(stream), self.duplicates)
     }
 
     /// Creates a `SearchStream` from a `StartsWith` matcher for the given `query`.
@@ -244,7 +244,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn starts_with<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
+    pub fn starts_with<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
         let automaton = Str::new(query).starts_with();
         self.create_stream(automaton)
     }
@@ -269,7 +269,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn exact_match<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
+    pub fn exact_match<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
         let automaton = Str::new(query);
         self.create_stream(automaton)
     }
@@ -300,7 +300,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> SearchStream<'a>
+    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> impl SearchStream<'a>
         where DFA: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
     {
         struct Adapter<'a>(MaybeOwned<'a, levenshtein_automata::DFA>);
@@ -355,7 +355,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
+    pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
         self.levenshtein(builder.build_dfa(query))
     }
 
@@ -384,7 +384,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> SearchStream<'a> {
+    pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
         self.levenshtein(builder.build_prefix_dfa(query))
     }
 
@@ -404,7 +404,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn subsequence<'a>(&'a self, query: &'a str) -> SearchStream<'a> {
+    pub fn subsequence<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
