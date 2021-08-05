@@ -11,7 +11,7 @@ doctest = false
 
 [dependencies]
 rkyv = "0.6.4"
-rkyv_derive = "0.6.3"
+rkyv_derive = "0.7.5"
 serde = { version = "1.0", features = ["derive"] }
 stats_alloc = "0.1.8"
 porigon = { path = "../engine", features = ["rkyv_support"] }
