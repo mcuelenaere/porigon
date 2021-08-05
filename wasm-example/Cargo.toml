@@ -10,7 +10,7 @@ crate-type = ["cdylib", "rlib"]
 doctest = false
 
 [dependencies]
-rkyv = "0.6.4"
+rkyv = "0.7.5"
 rkyv_derive = "0.6.3"
 serde = { version = "1.0", features = ["derive"] }
 stats_alloc = "0.1.8"
