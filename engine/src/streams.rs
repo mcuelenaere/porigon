@@ -220,7 +220,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
+    /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
@@ -240,7 +240,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
+    /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
@@ -269,7 +269,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     ///     ("foo".as_bytes(), 0),
     ///     ("foobar".as_bytes(), 1))
     /// ).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
+    /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .filter(|key, _, _| key != "foobar".as_bytes())
@@ -304,7 +304,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// );
     /// items.sort_by_key(|(key, _)| *key);
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
+    /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("bar")
     ///     .map(|key, index, score| (key, index & !(1 << 32), score))

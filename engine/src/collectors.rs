@@ -66,7 +66,7 @@ impl TopScoreCollector {
     ///     ("foo".as_bytes(), 1),
     ///     ("foobar".as_bytes(), 2),
     /// )).unwrap();
-    /// let searchable = storage.as_searchable().unwrap();
+    /// let searchable = storage.to_searchable().unwrap();
     /// let mut collector = TopScoreCollector::new(1);
     ///
     /// collector.consume_stream(

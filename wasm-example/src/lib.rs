@@ -86,7 +86,7 @@ impl Searcher {
             *ratings.get(&index).unwrap_or(&0) as u64
         };
 
-        let titles = data.titles.as_searchable().unwrap();
+        let titles = data.titles.to_searchable().unwrap();
 
         self.collector.reset();
 
