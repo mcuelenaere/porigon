@@ -17,8 +17,10 @@ pub struct SearchableStorage {
 }
 
 #[cfg(feature = "rkyv_support")]
-impl ArchivedSearchableStorage {
-    pub fn as_searchable(&self) -> Result<Searchable<rkyv::std_impl::chd::ArchivedHashMap<u64, rkyv::std_impl::ArchivedVec<u64>>>, fst::Error> {
+impl ArchivedSearchableStorage
+    where SearchableStorage: rkyv::Archive
+{
+    pub fn as_searchable(&self) -> Result<Searchable<rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>>>, fst::Error> {
         Ok(Searchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,

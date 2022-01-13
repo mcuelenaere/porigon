@@ -124,7 +124,7 @@ impl DuplicatesLookup for HashMap<u64, Vec<u64>> {
 }
 
 #[cfg(feature = "rkyv_support")]
-impl DuplicatesLookup for rkyv::std_impl::chd::ArchivedHashMap<u64, rkyv::std_impl::ArchivedVec<u64>> {
+impl DuplicatesLookup for rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>> {
     fn get(&self, key: u64) -> Option<&[u64]> {
         self.get(&key).map(|values| values.as_slice())
     }

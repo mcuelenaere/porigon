@@ -3,7 +3,7 @@ extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
 use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
-use rkyv::{Archive, Serialize, AlignedVec, archived_root, ser::{serializers::AlignedSerializer, Serializer}};
+use rkyv::{Archive, Serialize, archived_root, ser::{serializers::AllocSerializer, Serializer}};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use std::alloc::System;
@@ -49,9 +49,9 @@ impl ArchivedSearchData {
 
 impl SearchData {
     pub fn to_bytes(&self) -> Vec<u8> {
-        let mut serializer = AlignedSerializer::new(AlignedVec::new());
+        let mut serializer = AllocSerializer::<4096>::default();
         serializer.serialize_value(self).unwrap();
-        serializer.into_inner().into_vec()
+        serializer.into_serializer().into_inner().into_vec()
     }
 }
 
