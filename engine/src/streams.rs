@@ -251,7 +251,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn rescore<F>(self, func: F) -> RescoredStream<F, Self>
-        where F: 's + Fn(&[u8], u64, Score) -> Score,
+        where F: Fn(&[u8], u64, Score) -> Score,
               Self: Sized
     {
         RescoredStream::new(self, func)
@@ -278,7 +278,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn filter<F>(self, func: F) -> FilteredStream<F, Self>
-        where F: 's + Fn(&[u8], u64, Score) -> bool,
+        where F: Fn(&[u8], u64, Score) -> bool,
               Self: Sized
     {
         FilteredStream::new(self, func)
@@ -314,7 +314,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn map<F>(self, func: F) -> MappedStream<F, Self>
-        where F: 's + Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+        where F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
               Self: Sized
     {
         MappedStream::new(self, func)
