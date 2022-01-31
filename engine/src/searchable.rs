@@ -1,10 +1,11 @@
 use crate::Score;
-use crate::streams::{DeduplicatedStream, DuplicatesLookup, SearchStream, dedupe_from_iter};
+use crate::streams::{DeduplicatedStream, DuplicatesLookup, SearchStream};
 use fst::{IntoStreamer, Streamer, Map};
 use fst::automaton::{Automaton, Str, Subsequence};
 use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
 use std::collections::HashMap;
+use itertools::Itertools;
 
 /// Structure that contains all underlying data needed to construct a `Searchable`.
 ///
@@ -41,8 +42,7 @@ impl SearchableStorage {
     /// This expects the items to be pre-sorted in lexicographic order. If not, an error will be
     /// returned.
     ///
-    /// This method can handle duplicate keys, but at the loss of a single bit of precision in the
-    /// output values (the highest bit is reserved to tag an item as being duplicate).
+    /// This method can handle duplicate keys.
     ///
     /// # Example
     /// ```
@@ -54,11 +54,24 @@ impl SearchableStorage {
     /// )).unwrap();
     /// ```
     pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
-        // group items by key
-        let (deduped_iter, duplicates) = dedupe_from_iter(iter);
+        // group items by key and build map
+        let mut duplicates = HashMap::new();
+        let map = Map::from_iter(
+            iter
+            .into_iter()
+            .group_by(|(key, _)| *key)
+            .into_iter()
+            .map(|(key, mut group)| {
+                let (_, first) = group.next().unwrap();
+                if let Some((_, second)) = group.next() {
+                    let mut indices = vec![first, second];
+                    indices.extend(group.map(|(_, next)| next));
+                    duplicates.insert(first, indices);
+                }
 
-        // build map
-        let map = Map::from_iter(deduped_iter)?;
+                (key, first)
+            })
+        )?;
 
         Ok(Self {
             fst_data: map.into_fst().into_inner(),

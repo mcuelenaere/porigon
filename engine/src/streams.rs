@@ -1,6 +1,5 @@
 use crate::Score;
 use fst::Streamer;
-use itertools::Itertools;
 use std::collections::HashMap;
 
 pub struct FilteredStream<F, S>
@@ -130,8 +129,6 @@ impl DuplicatesLookup for rkyv::collections::ArchivedHashMap<u64, rkyv::vec::Arc
     }
 }
 
-const DUPES_TAG: u64 = 1 << 63;
-
 pub struct DeduplicatedStream<'a, S, D>
     where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
           D: DuplicatesLookup
@@ -176,31 +173,20 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
             }
         }
 
-        match self.wrapped.next() {
-            Some((key, index, score)) => {
-                if index & DUPES_TAG != 0 {
-                    let dupes = match self.duplicates.get(index ^ DUPES_TAG) {
-                        Some(x) => x,
-                        None => return None,
-                    };
-
+        self.wrapped.next().map(|(key, index, score)| {
+            match self.duplicates.get(index) {
+                Some(dupes) => {
                     let mut iter = dupes.iter();
-                    match iter.next() {
-                        Some(index) => {
-                            self.cur_key.clear();
-                            self.cur_key.extend_from_slice(key);
-                            self.cur_iter = Some(iter);
-                            self.cur_score = score;
-                            Some((key, *index, score))
-                        }
-                        None => None,
-                    }
-                } else {
-                    Some((key, index, score))
-                }
-            },
-            None => None,
-        }
+                    let index = iter.next().unwrap();
+                    self.cur_key.clear();
+                    self.cur_key.extend_from_slice(key);
+                    self.cur_iter = Some(iter);
+                    self.cur_score = score;
+                    (key, *index, score)
+                },
+                None => (key, index, score),
+            }
+        })
     }
 }
 
@@ -324,31 +310,4 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
 impl<'s, S> SearchStream<'s> for S
     where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
 {
-}
-
-pub fn dedupe_from_iter<'a, I>(iter: I) -> (Vec<(&'a [u8], u64)>, HashMap<u64, Vec<u64>>)
-    where I: IntoIterator<Item=(&'a [u8], u64)>,
-{
-    let mut duplicates = HashMap::new();
-    let mut counter: u64 = 1;
-    let deduped_iter = iter.into_iter()
-        .group_by(|(key, _)| *key)
-        .into_iter()
-        .map(|(key, mut group)| {
-            let (_, first) = group.next().unwrap();
-            if let Some((_, second)) = group.next() {
-                let mut indices = vec!(first, second);
-                while let Some((_, next)) = group.next() {
-                    indices.push(next);
-                }
-                duplicates.insert(counter, indices);
-                let dup_index = counter | DUPES_TAG;
-                counter += 1;
-                (key, dup_index)
-            } else {
-                (key, first)
-            }
-        })
-        .collect(); // TODO: should return an iterator instead of collecting here
-    (deduped_iter, duplicates)
 }
