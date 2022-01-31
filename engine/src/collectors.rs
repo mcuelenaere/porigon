@@ -90,6 +90,11 @@ impl TopScoreCollector {
         }
     }
 
+    /// Collects a single item
+    pub fn collect_item(&mut self, index: u64, score: Score) {
+        self.process_document(Document { score, index })
+    }
+
     fn process_document(&mut self, doc: Document) {
         if let Some(Reverse(existing_doc)) = self.heap.iter().find(|other| other.0 == doc) {
             if doc.score > existing_doc.score {
