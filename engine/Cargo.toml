@@ -11,12 +11,12 @@ edition = "2021"
 name = "porigon"
 
 [dependencies]
-fst = { version = "0.4.7", default-features = false }
-levenshtein_automata = "0.2.1"
-itertools = "0.10.3"
-maybe-owned = "0.3.4"
+fst = { version = "0.4", default-features = false }
+levenshtein_automata = "0.2"
+itertools = "0.10"
+maybe-owned = "0.3"
 serde = { version = "1.0", features = ["derive"], optional = true }
-rkyv = { version = "0.7.29", optional = true }
+rkyv = { version = "0.7", optional = true }
 
 [features]
 serde_support = [ "serde" ]
