@@ -1,6 +1,5 @@
-use crate::Score;
-use crate::streams::{DeduplicatedStream, DuplicatesLookup, SearchStream};
-use fst::{IntoStreamer, Streamer, Map};
+use crate::SearchResult;
+use fst::{IntoStreamer, Map, Streamer};
 use fst::automaton::{Automaton, Str, Subsequence};
 use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
@@ -49,11 +48,11 @@ impl SearchableStorage {
     /// use porigon::SearchableStorage;
     ///
     /// let searchable = SearchableStorage::build_from_iter(vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("foo".as_bytes(), 2),
+    ///     ("bar", 1),
+    ///     ("foo", 2),
     /// )).unwrap();
     /// ```
-    pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
+    pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error> where I: IntoIterator<Item=(&'a str, u64)> {
         // group items by key and build map
         let mut duplicates = HashMap::new();
         let map = Map::from_iter(
@@ -80,6 +79,72 @@ impl SearchableStorage {
     }
 }
 
+pub trait DuplicatesLookup {
+    fn get(&self, key: u64) -> Option<&[u64]>;
+}
+
+impl DuplicatesLookup for HashMap<u64, Vec<u64>> {
+    fn get(&self, key: u64) -> Option<&[u64]> {
+        self.get(&key).map(|values| values.as_slice())
+    }
+}
+
+#[cfg(feature = "rkyv_support")]
+impl DuplicatesLookup for rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>> {
+    fn get(&self, key: u64) -> Option<&[u64]> {
+        self.get(&key).map(|values| values.as_slice())
+    }
+}
+
+struct Searcher<'a, D, S> {
+    cur_state: Option<((*const u8, usize), std::slice::Iter<'a, u64>)>,
+    duplicates: &'a D,
+    streamer: S,
+}
+
+impl<'a, D, S> Iterator for Searcher<'a, D, S>
+    where S: 'a + for<'b> Streamer<'b, Item=(&'b [u8], u64)>,
+          D: DuplicatesLookup
+{
+    type Item = SearchResult<'a>;
+
+    fn next(&mut self) -> Option<SearchResult<'a>> {
+        if let Some((key, iter)) = &mut self.cur_state {
+            match iter.next() {
+                Some(index) => {
+                    let key = unsafe { std::slice::from_raw_parts((*key).0, (*key).1) };
+                    // SAFETY: we populate the FST with `&str` only, so it is safe to convert this to a `&str`
+                    let key = unsafe { std::str::from_utf8_unchecked(key) };
+                    return Some((key, *index, 0));
+                },
+                None => {
+                    self.cur_state = None;
+                }
+            }
+        }
+
+        self.streamer.next().map(|(key, index)| {
+            let key = (key.as_ptr(), key.len());
+
+            let index = match self.duplicates.get(index) {
+                Some(dupes) => {
+                    let mut iter = dupes.iter();
+                    let index = iter.next().unwrap();
+                    self.cur_state = Some((key, iter));
+
+                    *index
+                },
+                None => index,
+            };
+
+            let key = unsafe { std::slice::from_raw_parts(key.0, key.1) };
+            // SAFETY: we populate the FST with `&str` only, so it is safe to convert this to a `&str`
+            let key = unsafe { std::str::from_utf8_unchecked(key) };
+            (key, index, 0)
+        })
+    }
+}
+
 /// Main entry point to querying FSTs.
 ///
 /// This is a thin wrapper around `fst::Map`, providing easy access to querying it in
@@ -90,24 +155,14 @@ pub struct Searchable<'a, D: DuplicatesLookup> {
 }
 
 impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
-    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> impl SearchStream<'a>
+    fn create_stream<'a: 's, A: 'a>(&'a self, automaton: A) -> impl Iterator<Item=SearchResult<'s>> + 'a
         where A: Automaton
     {
-        struct Adapter<'m, A>(fst::map::Stream<'m, A>)
-            where A: Automaton;
-
-        impl<'a, 'm, A> Streamer<'a> for Adapter<'m, A>
-            where A: Automaton
-        {
-            type Item = (&'a [u8], u64, Score);
-
-            fn next(&'a mut self) -> Option<Self::Item> {
-                self.0.next().map(|(key, index)| (key, index, 0))
-            }
+        Searcher {
+            cur_state: None,
+            streamer: self.map.search(automaton).into_stream(),
+            duplicates: self.duplicates,
         }
-
-        let stream = self.map.search(automaton).into_stream();
-        DeduplicatedStream::new(Adapter(stream), self.duplicates)
     }
 
     /// Creates a `SearchStream` from a `StartsWith` matcher for the given `query`.
@@ -118,20 +173,20 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use porigon::SearchableStorage;
     ///
     /// let items = vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("foo".as_bytes(), 2),
-    ///     ("foo_bar".as_bytes(), 3)
+    ///     ("bar", 1),
+    ///     ("foo", 2),
+    ///     ("foo_bar", 3)
     /// );
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     ///
     /// let mut strm = searchable.starts_with("foo");
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
-    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo_bar", 3, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn starts_with<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn starts_with<'a: 's>(&'a self, query: &'a str) -> impl Iterator<Item=SearchResult<'s>> + 'a {
         let automaton = Str::new(query).starts_with();
         self.create_stream(automaton)
     }
@@ -144,19 +199,19 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use porigon::SearchableStorage;
     ///
     /// let items = vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("foo".as_bytes(), 2),
-    ///     ("foo_bar".as_bytes(), 3)
+    ///     ("bar", 1),
+    ///     ("foo", 2),
+    ///     ("foo_bar", 3)
     /// );
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     ///
     /// let mut strm = searchable.exact_match("foo");
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 2, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn exact_match<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn exact_match<'a: 's>(&'a self, query: &'a str) -> impl Iterator<Item=SearchResult<'s>> + 'a {
         let automaton = Str::new(query);
         self.create_stream(automaton)
     }
@@ -171,10 +226,10 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("fob".as_bytes(), 2),
-    ///     ("foo".as_bytes(), 3),
-    ///     ("foo_bar".as_bytes(), 4)
+    ///     ("bar", 1),
+    ///     ("fob", 2),
+    ///     ("foo", 3),
+    ///     ("foo_bar", 4)
     /// );
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
@@ -182,12 +237,12 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
     /// let mut strm = searchable.levenshtein(&dfa);
-    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), Some(("fob", 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 3, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> impl SearchStream<'a>
+    pub fn levenshtein<'a: 's, DFA>(&'a self, dfa: DFA) -> impl Iterator<Item=SearchResult<'s>> + 'a
         where DFA: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
     {
         struct Adapter<'a>(MaybeOwned<'a, levenshtein_automata::DFA>);
@@ -226,10 +281,10 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("fob".as_bytes(), 2),
-    ///     ("foo".as_bytes(), 3),
-    ///     ("foo_bar".as_bytes(), 4)
+    ///     ("bar", 1),
+    ///     ("fob", 2),
+    ///     ("foo", 3),
+    ///     ("foo_bar", 4)
     /// );
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
@@ -237,12 +292,12 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
     /// let mut strm = searchable.levenshtein_exact_match(&levenshtein_builder, "foo");
-    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
+    /// assert_eq!(strm.next(), Some(("fob", 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 3, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
+    pub fn levenshtein_exact_match<'a: 's>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl Iterator<Item=SearchResult<'s>> + 'a {
         self.levenshtein(builder.build_dfa(query))
     }
 
@@ -254,10 +309,10 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage};
     ///
     /// let items = vec!(
-    ///     ("bar".as_bytes(), 1),
-    ///     ("fob".as_bytes(), 2),
-    ///     ("foo".as_bytes(), 3),
-    ///     ("foo_bar".as_bytes(), 4)
+    ///     ("bar", 1),
+    ///     ("fob", 2),
+    ///     ("foo", 3),
+    ///     ("foo_bar", 4)
     /// );
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
@@ -265,13 +320,13 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     ///
     /// let dfa = levenshtein_builder.build_dfa("foo");
     /// let mut strm = searchable.levenshtein_starts_with(&levenshtein_builder, "foo");
-    /// assert_eq!(strm.next(), Some(("fob".as_bytes(), 2, 0)));
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 3, 0)));
-    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 4, 0)));
+    /// assert_eq!(strm.next(), Some(("fob", 2, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 3, 0)));
+    /// assert_eq!(strm.next(), Some(("foo_bar", 4, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
+    pub fn levenshtein_starts_with<'a: 's>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl Iterator<Item=SearchResult<'s>> + 'a {
         self.levenshtein(builder.build_prefix_dfa(query))
     }
 
@@ -282,16 +337,16 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// use fst::Streamer;
     /// use porigon::SearchableStorage;
     ///
-    /// let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
+    /// let items = vec!(("bar_foo", 2), ("foo", 0), ("foo_bar", 1));
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     ///
     /// let mut strm = searchable.subsequence("fb");
-    /// assert_eq!(strm.next(), Some(("foo_bar".as_bytes(), 1, 0)));
+    /// assert_eq!(strm.next(), Some(("foo_bar", 1, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn subsequence<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn subsequence<'a: 's>(&'a self, query: &'a str) -> impl Iterator<Item=SearchResult<'s>> + 'a {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
@@ -303,24 +358,9 @@ mod tests {
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-    trait SearchStreamIntoVec {
-        fn into_vec(self) -> Vec<(String, u64, Score)>;
-    }
-
-    impl<'a, S: SearchStream<'a>> SearchStreamIntoVec for S
-    {
-        fn into_vec(mut self) -> Vec<(String, u64, Score)> {
-            let mut items = Vec::new();
-            while let Some((key, index, score)) = self.next() {
-                items.push((String::from_utf8(key.to_vec()).unwrap(), index, score));
-            }
-            items
-        }
-    }
-
     #[test]
     fn test_build() -> TestResult {
-        let items = vec!(("bar".as_bytes(), 1), ("foo".as_bytes(), 0));
+        let items = vec!(("bar", 1), ("foo", 0));
         let storage = SearchableStorage::build_from_iter(items)?;
         let results = storage.to_searchable()?.map.as_ref().stream().into_str_vec()?;
         assert_eq!(results.len(), 2);
@@ -330,130 +370,111 @@ mod tests {
 
     #[test]
     fn test_searchable_exact_match() -> TestResult {
-        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo", 1), ("foo", 0), ("foobar", 2));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
         // negative match
-        let results = searchable.exact_match("bar").into_vec();
+        let results = searchable.exact_match("bar").collect_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.exact_match("foo").into_vec();
+        let results = searchable.exact_match("foo").collect_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 0)));
+        assert_eq!(results, vec!(("foo", 0, 0)));
 
         Ok(())
     }
 
     #[test]
     fn test_searchable_starts_with() -> TestResult {
-        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo", 1), ("foo", 0), ("foobar", 2));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
         // negative match
-        let results = searchable.starts_with("b").into_vec();
+        let results = searchable.starts_with("b").collect_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.starts_with("foo").into_vec();
+        let results = searchable.starts_with("foo").collect_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 0)));
+        assert_eq!(results, vec!(("foo", 0, 0), ("foobar", 2, 0)));
 
         Ok(())
     }
 
     #[test]
     fn test_searchable_subsequence() -> TestResult {
-        let items = vec!(("bar_foo".as_bytes(), 2), ("foo".as_bytes(), 0), ("foo_bar".as_bytes(), 1));
+        let items = vec!(("bar_foo", 2), ("foo", 0), ("foo_bar", 1));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
         // negative match
-        let results = searchable.subsequence("m").into_vec();
+        let results = searchable.subsequence("m").collect_vec();
         assert_eq!(results.len(), 0);
 
         // positive match
-        let results = searchable.subsequence("fb").into_vec();
+        let results = searchable.subsequence("fb").collect_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!(("foo_bar".to_string(), 1, 0)));
+        assert_eq!(results, vec!(("foo_bar", 1, 0)));
 
         // other positive match
-        let results = searchable.subsequence("bf").into_vec();
+        let results = searchable.subsequence("bf").collect_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!(("bar_foo".to_string(), 2, 0)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_scored_stream() -> TestResult {
-        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
-        let storage = SearchableStorage::build_from_iter(items)?;
-        let searchable = storage.to_searchable()?;
-
-        // use key
-        let results = searchable.starts_with("foo").rescore(|key, _, _| key.len() as u64).into_vec();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 3), ("foobar".to_string(), 2, 6)));
-
-        // use index
-        let results = searchable.starts_with("foo").rescore(|_, idx, _| (idx * 2) as u64).into_vec();
-        assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foobar".to_string(), 2, 4)));
+        assert_eq!(results, vec!(("bar_foo", 2, 0)));
 
         Ok(())
     }
 
     #[test]
     fn test_filter() -> TestResult {
-        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 0), ("foobar".as_bytes(), 2));
+        let items = vec!(("fo", 1), ("foo", 0), ("foobar", 2));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
         let results = searchable
             .starts_with("foo")
-            .filter(|key, _, _| key != "foobar".as_bytes())
-            .into_vec();
+            .filter(|(key, _, _)| *key != "foobar")
+            .collect_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 0)));
+        assert_eq!(results, vec!(("foo", 0, 0)));
 
         let results = searchable
             .starts_with("foo")
-            .filter(|key, _, _| key == "foobar".as_bytes())
-            .into_vec();
+            .filter(|(key, _, _)| *key == "foobar")
+            .collect_vec();
         assert_eq!(results.len(), 1);
-        assert_eq!(results, vec!(("foobar".to_string(), 2, 0)));
+        assert_eq!(results, vec!(("foobar", 2, 0)));
 
         Ok(())
     }
 
     #[test]
     fn test_map() -> TestResult {
-        let items = vec!(("fo".as_bytes(), 1), ("foo".as_bytes(), 2), ("foobar".as_bytes(), 3));
+        let items = vec!(("fo", 1), ("foo", 2), ("foobar", 3));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
         let results = searchable
             .starts_with("foo")
-            .map(|key, index, score| (key, index * 2, score))
-            .into_vec();
+            .map(|(key, index, score)| (key, index * 2, score))
+            .collect_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("foo".to_string(), 4, 0), ("foobar".to_string(), 6, 0)));
+        assert_eq!(results, vec!(("foo", 4, 0), ("foobar", 6, 0)));
 
         Ok(())
     }
 
     #[test]
     fn test_duplicates() -> TestResult {
-        let items = vec!(("foo".as_bytes(), 0), ("foo".as_bytes(), 1), ("foobar".as_bytes(), 2));
+        let items = vec!(("foo", 0), ("foo", 1), ("foobar", 2));
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
 
-        let results = searchable.exact_match("foo").into_vec();
+        let results = searchable.exact_match("foo").collect_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("foo".to_string(), 0, 0), ("foo".to_string(), 1, 0)));
+        assert_eq!(results, vec!(("foo", 0, 0), ("foo", 1, 0)));
 
         Ok(())
     }
@@ -461,44 +482,47 @@ mod tests {
     #[test]
     fn test_levenshtein() -> TestResult {
         let items = vec!(
-            ("bar".as_bytes(), 0),
-            ("baz".as_bytes(), 1),
-            ("boz".as_bytes(), 2),
-            ("coz".as_bytes(), 3),
-            ("fob".as_bytes(), 4),
-            ("foo".as_bytes(), 5),
-            ("foobar".as_bytes(), 6),
-            ("something else".as_bytes(), 7),
+            ("bar", 0),
+            ("baz", 1),
+            ("boz", 2),
+            ("coz", 3),
+            ("fob", 4),
+            ("foo", 5),
+            ("foobar", 6),
+            ("something else", 7),
         );
         let storage = SearchableStorage::build_from_iter(items)?;
         let searchable = storage.to_searchable()?;
         let dfa_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
         let dfa_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
 
-        let results = searchable.levenshtein_exact_match(&dfa_builder_1, "foo").into_vec();
+        let results = searchable.levenshtein_exact_match(&dfa_builder_1, "foo").collect_vec();
         assert_eq!(results.len(), 2);
-        assert_eq!(results, vec!(("fob".to_string(), 4, 0), ("foo".to_string(), 5, 0)));
+        assert_eq!(results, vec!(("fob", 4, 0), ("foo", 5, 0)));
 
-        let results = searchable.levenshtein_starts_with(&dfa_builder_1, "foo").into_vec();
+        let results = searchable.levenshtein_starts_with(&dfa_builder_1, "foo").collect_vec();
         assert_eq!(results.len(), 3);
-        assert_eq!(results, vec!(("fob".to_string(), 4, 0), ("foo".to_string(), 5, 0), ("foobar".to_string(), 6, 0)));
+        assert_eq!(results, vec!(("fob", 4, 0), ("foo", 5, 0), ("foobar", 6, 0)));
 
-        let results = searchable.levenshtein_exact_match(&dfa_builder_2, "bar").into_vec();
+        let results = searchable.levenshtein_exact_match(&dfa_builder_2, "bar").collect_vec();
         assert_eq!(results.len(), 3);
-        assert_eq!(results, vec!(("bar".to_string(), 0, 0), ("baz".to_string(), 1, 0), ("boz".to_string(), 2, 0)));
+        assert_eq!(results, vec!(("bar", 0, 0), ("baz", 1, 0), ("boz", 2, 0)));
 
         let dfa = dfa_builder_2.build_prefix_dfa("bar");
         let results = searchable
             .levenshtein(&dfa)
-            .rescore(
-                |key, _, _| match dfa.eval(key) {
-                    LevenshteinDistance::Exact(d) => d as u64,
-                    LevenshteinDistance::AtLeast(_) => 0,
+            .map(
+                |(key, index, _)| {
+                    let score = match dfa.eval(key) {
+                        LevenshteinDistance::Exact(d) => d as u64,
+                        LevenshteinDistance::AtLeast(_) => 0,
+                    };
+                    (key, index, score)
                 }
             )
-            .into_vec();
+            .collect_vec();
         assert_eq!(results.len(), 3);
-        assert_eq!(results, vec!(("bar".to_string(), 0, 0), ("baz".to_string(), 1, 1), ("boz".to_string(), 2, 2)));
+        assert_eq!(results, vec!(("bar", 0, 0), ("baz", 1, 1), ("boz", 2, 2)));
 
         Ok(())
     }

@@ -1,5 +1,4 @@
-use crate::Score;
-use fst::{IntoStreamer, Streamer};
+use crate::{Score, SearchResult};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
@@ -55,7 +54,7 @@ impl TopScoreCollector {
         self.heap.clear();
     }
 
-    /// Consumes a `fst::Streamer`, collecting the items and only keeping the top N items (based on
+    /// Consumes an iterator of `SearchResult`, collecting the items and only keeping the top N items (based on
     /// their score).
     ///
     /// # Example
@@ -80,12 +79,11 @@ impl TopScoreCollector {
     /// );
     /// assert_eq!(collector.top_documents()[0].index, 2);
     /// ```
-    pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
-        where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, Score)>,
-              S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
+    pub fn consume_stream<'a, I>(&mut self, iterator: I)
+        where I: IntoIterator<Item=SearchResult<'a>>
     {
-        let mut stream = streamer.into_stream();
-        while let Some((_, index, score)) = stream.next() {
+        let mut iter = iterator.into_iter();
+        while let Some((_, index, score)) = iter.next() {
             self.process_document(Document { score, index });
         }
     }

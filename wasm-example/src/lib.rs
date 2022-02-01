@@ -2,7 +2,7 @@ extern crate stats_alloc;
 extern crate wasm_bindgen;
 
 use wasm_bindgen::prelude::*;
-use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
+use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage};
 use rkyv::{Archive, Serialize, archived_root, ser::{serializers::AllocSerializer, Serializer}};
 use std::collections::HashMap;
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
@@ -93,12 +93,18 @@ impl Searcher {
         self.collector.consume_stream(
             titles
                 .exact_match(query)
-                .rescore(move |_, index, _| 50000 + get_rating_for(index))
+                .map(move |(key, index, _)| {
+                    let score = 50000 + get_rating_for(index);
+                    (key, index, score)
+                })
         );
         self.collector.consume_stream(
             titles
                 .starts_with(query)
-                .rescore(move |_, index, _| 40000 + get_rating_for(index))
+                .map(move |(key, index, _)| {
+                    let score = 40000 + get_rating_for(index);
+                    (key, index, score)
+                })
         );
 
         if query.len() > 3 {
@@ -106,22 +112,34 @@ impl Searcher {
             self.collector.consume_stream(
                 titles
                     .levenshtein_exact_match(&self.levenshtein_builder_1, query)
-                    .rescore(move |_, index, _| 30000 + get_rating_for(index))
+                    .map(move |(key, index, _)| {
+                        let score = 30000 + get_rating_for(index);
+                        (key, index, score)
+                    })
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_starts_with(&self.levenshtein_builder_1, query)
-                    .rescore(move |_, index, _| 20000 + get_rating_for(index))
+                    .map(move |(key, index, _)| {
+                        let score = 20000 + get_rating_for(index);
+                        (key, index, score)
+                    })
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_exact_match(&self.levenshtein_builder_2, query)
-                    .rescore(move |_, index, _| 10000 + get_rating_for(index))
+                    .map(move |(key, index, _)| {
+                        let score = 10000 + get_rating_for(index);
+                        (key, index, score)
+                    })
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_starts_with(&self.levenshtein_builder_2, query)
-                    .rescore(move |_, index, _| get_rating_for(index))
+                    .map(move |(key, index, _)| {
+                        let score = get_rating_for(index);
+                        (key, index, score)
+                    })
             );
         }
 
@@ -144,7 +162,7 @@ pub struct BuildData {
 pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
     let data: BuildData = val.into_serde().map_err(|err| err_to_js("failed to parse data", err))?;
     let build_searchable = |input: Vec<(u64, String)>| {
-        let mut i: Vec<(&[u8], u64)> = input.iter().map(|(key, val)| (val.as_bytes(), *key)).collect();
+        let mut i: Vec<(&str, u64)> = input.iter().map(|(key, val)| (val.as_str(), *key)).collect();
         i.sort_by_key(|(key, _)| *key);
         SearchableStorage::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };
