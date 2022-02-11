@@ -113,19 +113,25 @@ impl<'a, F, S> Streamer<'a> for RescoredStream<F, S>
 }
 
 pub trait DuplicatesLookup {
-    fn get(&self, key: u64) -> Option<&[u64]>;
+    type Iter: Iterator<Item=u64>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter>;
 }
 
-impl DuplicatesLookup for HashMap<u64, Vec<u64>> {
-    fn get(&self, key: u64) -> Option<&[u64]> {
-        self.get(&key).map(|values| values.as_slice())
+impl<'a> DuplicatesLookup for &'a HashMap<u64, Vec<u64>> {
+    type Iter = std::iter::Cloned<std::slice::Iter<'a, u64>>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter> {
+        HashMap::get(self, &key).map(|values| values.as_slice().into_iter().cloned())
     }
 }
 
 #[cfg(feature = "rkyv_support")]
-impl DuplicatesLookup for rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>> {
-    fn get(&self, key: u64) -> Option<&[u64]> {
-        self.get(&key).map(|values| values.as_slice())
+impl<'a> DuplicatesLookup for &'a rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>> {
+    type Iter = std::iter::Cloned<std::slice::Iter<'a, u64>>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter> {
+        rkyv::collections::ArchivedHashMap::get(self, &key).map(|values| values.as_slice().into_iter().cloned())
     }
 }
 
@@ -134,7 +140,7 @@ pub struct DeduplicatedStream<'a, S, D>
           D: DuplicatesLookup
 {
     cur_key: Vec<u8>,
-    cur_iter: Option<std::slice::Iter<'a, u64>>,
+    cur_iter: Option<D::Iter>,
     cur_score: Score,
     duplicates: &'a D,
     wrapped: S,
@@ -164,7 +170,7 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
     fn next(&'a mut self) -> Option<Self::Item> {
         if let Some(iter) = &mut self.cur_iter {
             match iter.next() {
-                Some(index) => return Some((self.cur_key.as_slice(), *index, self.cur_score)),
+                Some(index) => return Some((self.cur_key.as_slice(), index, self.cur_score)),
                 None => {
                     self.cur_iter = None;
                     self.cur_key.clear();
@@ -175,14 +181,13 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
 
         self.wrapped.next().map(|(key, index, score)| {
             match self.duplicates.get(index) {
-                Some(dupes) => {
-                    let mut iter = dupes.iter();
-                    let index = iter.next().unwrap();
+                Some(mut dupes) => {
+                    let index = dupes.next().unwrap();
                     self.cur_key.clear();
                     self.cur_key.extend_from_slice(key);
-                    self.cur_iter = Some(iter);
+                    self.cur_iter = Some(dupes);
                     self.cur_score = score;
-                    (key, *index, score)
+                    (key, index, score)
                 },
                 None => (key, index, score),
             }

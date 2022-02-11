@@ -21,7 +21,7 @@ pub struct SearchableStorage {
 impl ArchivedSearchableStorage
     where SearchableStorage: rkyv::Archive
 {
-    pub fn to_searchable(&self) -> Result<Searchable<rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>>>, fst::Error> {
+    pub fn to_searchable(&self) -> Result<Searchable<&rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>>>, fst::Error> {
         Ok(Searchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
@@ -30,7 +30,7 @@ impl ArchivedSearchableStorage
 }
 
 impl SearchableStorage {
-    pub fn to_searchable(&self) -> Result<Searchable<HashMap<u64, Vec<u64>>>, fst::Error> {
+    pub fn to_searchable(&self) -> Result<Searchable<&HashMap<u64, Vec<u64>>>, fst::Error> {
         Ok(Searchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
@@ -86,7 +86,7 @@ impl SearchableStorage {
 /// various ways (exact_match, starts_with, levenshtein, ...).
 pub struct Searchable<'a, D: DuplicatesLookup> {
     map: Map<&'a [u8]>,
-    duplicates: &'a D,
+    duplicates: D,
 }
 
 impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
@@ -107,7 +107,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
         }
 
         let stream = self.map.search(automaton).into_stream();
-        DeduplicatedStream::new(Adapter(stream), self.duplicates)
+        DeduplicatedStream::new(Adapter(stream), &self.duplicates)
     }
 
     /// Creates a `SearchStream` from a `StartsWith` matcher for the given `query`.
