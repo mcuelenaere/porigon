@@ -196,7 +196,7 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
 }
 
 /// FST stream on which various operations can be chained.
-pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
+pub trait SearchStream: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// Scores a stream, using the given closure.
     ///
     /// # Examples
@@ -312,7 +312,7 @@ pub trait SearchStream<'s>: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     }
 }
 
-impl<'s, S> SearchStream<'s> for S
+impl<S> SearchStream for S
     where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
 {
 }

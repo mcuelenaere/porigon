@@ -90,7 +90,7 @@ pub struct Searchable<'a, D: DuplicatesLookup> {
 }
 
 impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
-    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> impl SearchStream<'a>
+    fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> impl SearchStream + 'a
         where A: Automaton
     {
         struct Adapter<'m, A>(fst::map::Stream<'m, A>)
@@ -131,7 +131,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn starts_with<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn starts_with<'a>(&'a self, query: &'a str) -> impl SearchStream + 'a {
         let automaton = Str::new(query).starts_with();
         self.create_stream(automaton)
     }
@@ -156,7 +156,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn exact_match<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn exact_match<'a>(&'a self, query: &'a str) -> impl SearchStream + 'a {
         let automaton = Str::new(query);
         self.create_stream(automaton)
     }
@@ -187,7 +187,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> impl SearchStream<'a>
+    pub fn levenshtein<'a, DFA>(&'a self, dfa: DFA) -> impl SearchStream + 'a
         where DFA: Into<MaybeOwned<'a, levenshtein_automata::DFA>>
     {
         struct Adapter<'a>(MaybeOwned<'a, levenshtein_automata::DFA>);
@@ -242,7 +242,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
+    pub fn levenshtein_exact_match<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream + 'a {
         self.levenshtein(builder.build_dfa(query))
     }
 
@@ -271,7 +271,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream<'a> {
+    pub fn levenshtein_starts_with<'a>(&'a self, builder: &LevenshteinAutomatonBuilder, query: &'a str) -> impl SearchStream + 'a {
         self.levenshtein(builder.build_prefix_dfa(query))
     }
 
@@ -291,7 +291,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
-    pub fn subsequence<'a>(&'a self, query: &'a str) -> impl SearchStream<'a> {
+    pub fn subsequence<'a>(&'a self, query: &'a str) -> impl SearchStream + 'a {
         let automaton = Subsequence::new(query);
         self.create_stream(automaton)
     }
@@ -307,7 +307,7 @@ mod tests {
         fn into_vec(self) -> Vec<(String, u64, Score)>;
     }
 
-    impl<'a, S: SearchStream<'a>> SearchStreamIntoVec for S
+    impl<S: SearchStream> SearchStreamIntoVec for S
     {
         fn into_vec(mut self) -> Vec<(String, u64, Score)> {
             let mut items = Vec::new();
