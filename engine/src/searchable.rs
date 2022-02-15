@@ -260,7 +260,8 @@ impl<'s, D: DuplicatesLookup> SearchableInner<'s, D> {
     ///
     /// # Example
     /// ```
-    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
+    /// use porigon::levenshtein::LevenshteinAutomatonBuilder;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let items = vec!(
     ///     ("bar", 1),
@@ -315,7 +316,8 @@ impl<'s, D: DuplicatesLookup> SearchableInner<'s, D> {
     ///
     /// # Example
     /// ```
-    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
+    /// use porigon::levenshtein::LevenshteinAutomatonBuilder;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let items = vec!(
     ///     ("bar", 1),
@@ -346,7 +348,8 @@ impl<'s, D: DuplicatesLookup> SearchableInner<'s, D> {
     ///
     /// # Example
     /// ```
-    /// use porigon::{LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
+    /// use porigon::levenshtein::LevenshteinAutomatonBuilder;
+    /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let items = vec!(
     ///     ("bar", 1),

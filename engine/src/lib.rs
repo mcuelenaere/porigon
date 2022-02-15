@@ -1,4 +1,5 @@
 pub mod collectors;
+pub use levenshtein_automata as levenshtein;
 pub mod searchable;
 pub mod streams;
 
@@ -7,7 +8,6 @@ pub use crate::{
     searchable::{Searchable, SearchableStorage},
     streams::SearchStream,
 };
-pub use levenshtein_automata::{Distance as LevenshteinDistance, LevenshteinAutomatonBuilder};
 
 /// Score type, used for keeping a per-item score in `SearchStream`.
 pub type Score = u64;

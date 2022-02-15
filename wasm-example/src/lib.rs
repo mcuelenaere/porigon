@@ -1,7 +1,8 @@
 extern crate stats_alloc;
 extern crate wasm_bindgen;
 
-use porigon::{LevenshteinAutomatonBuilder, SearchStream, SearchableStorage, TopScoreCollector};
+use porigon::levenshtein::LevenshteinAutomatonBuilder;
+use porigon::{SearchStream, SearchableStorage, TopScoreCollector};
 use rkyv::{
     archived_root,
     ser::{serializers::AllocSerializer, Serializer},
