@@ -158,9 +158,9 @@ pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
         .into_serde()
         .map_err(|err| err_to_js("failed to parse data", err))?;
     let build_searchable = |input: Vec<(u64, String)>| {
-        let mut i: Vec<(&[u8], u64)> = input
+        let mut i: Vec<(&str, u64)> = input
             .iter()
-            .map(|(key, val)| (val.as_bytes(), *key))
+            .map(|(key, val)| (val.as_str(), *key))
             .collect();
         i.sort_by_key(|(key, _)| *key);
         SearchableStorage::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))

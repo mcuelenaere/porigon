@@ -1,39 +1,36 @@
 use crate::searchable::DuplicatesLookup;
 use crate::Score;
-use fst::Streamer;
 
 pub struct FilteredStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> bool,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> bool,
 {
-    cur_key: Vec<u8>,
+    cur_key: String,
     filter: F,
     wrapped: S,
 }
 
 impl<F, S> FilteredStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> bool,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> bool,
 {
     pub fn new(streamer: S, filter: F) -> Self {
         Self {
-            cur_key: Vec::new(),
+            cur_key: String::new(),
             filter,
             wrapped: streamer,
         }
     }
 }
 
-impl<'a, F, S> Streamer<'a> for FilteredStream<F, S>
+impl<F, S> SearchStream for FilteredStream<F, S>
 where
-    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> bool,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> bool,
 {
-    type Item = (&'a [u8], u64, Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&str, u64, Score)> {
         let filter_fn = &self.filter;
         while let Some((key, index, score)) = self.wrapped.next() {
             if !filter_fn(key, index, score) {
@@ -43,8 +40,8 @@ where
             // borrow checker workaround: we can't seem to pass the key as-is, so we make
             // an (useless) copy and return that instead
             self.cur_key.clear();
-            self.cur_key.extend_from_slice(key);
-            return Some((self.cur_key.as_slice(), index, score));
+            self.cur_key.push_str(key);
+            return Some((self.cur_key.as_str(), index, score));
         }
 
         None
@@ -53,8 +50,8 @@ where
 
 pub struct MappedStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> (&str, u64, Score),
 {
     mapper: F,
     wrapped: S,
@@ -62,8 +59,8 @@ where
 
 impl<F, S> MappedStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> (&str, u64, Score),
 {
     pub fn new(streamer: S, mapper: F) -> Self {
         Self {
@@ -73,14 +70,12 @@ where
     }
 }
 
-impl<'a, F, S> Streamer<'a> for MappedStream<F, S>
+impl<F, S> SearchStream for MappedStream<F, S>
 where
-    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> (&str, u64, Score),
 {
-    type Item = (&'a [u8], u64, Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&str, u64, Score)> {
         let mapper_fn = &self.mapper;
         self.wrapped
             .next()
@@ -90,8 +85,8 @@ where
 
 pub struct RescoredStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> Score,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> Score,
 {
     scorer: F,
     wrapped: S,
@@ -99,8 +94,8 @@ where
 
 impl<F, S> RescoredStream<F, S>
 where
-    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> Score,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> Score,
 {
     pub fn new(streamer: S, scorer: F) -> Self {
         Self {
@@ -110,14 +105,12 @@ where
     }
 }
 
-impl<'a, F, S> Streamer<'a> for RescoredStream<F, S>
+impl<F, S> SearchStream for RescoredStream<F, S>
 where
-    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
-    F: Fn(&[u8], u64, Score) -> Score,
+    S: SearchStream,
+    F: Fn(&str, u64, Score) -> Score,
 {
-    type Item = (&'a [u8], u64, Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&str, u64, Score)> {
         let scorer_fn = &self.scorer;
         self.wrapped
             .next()
@@ -127,10 +120,10 @@ where
 
 pub struct DeduplicatedStream<'a, S, D>
 where
-    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    S: SearchStream,
     D: DuplicatesLookup,
 {
-    cur_key: Vec<u8>,
+    cur_key: String,
     cur_iter: Option<D::Iter>,
     cur_score: Score,
     duplicates: &'a D,
@@ -139,12 +132,12 @@ where
 
 impl<'a, S, D> DeduplicatedStream<'a, S, D>
 where
-    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    S: SearchStream,
     D: DuplicatesLookup,
 {
     pub fn new(streamer: S, duplicates: &'a D) -> Self {
         Self {
-            cur_key: Vec::new(),
+            cur_key: String::new(),
             cur_iter: None,
             cur_score: 0,
             duplicates,
@@ -153,17 +146,15 @@ where
     }
 }
 
-impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
+impl<'a, S, D> SearchStream for DeduplicatedStream<'a, S, D>
 where
-    S: for<'c> Streamer<'c, Item = (&'c [u8], u64, Score)>,
+    S: SearchStream,
     D: DuplicatesLookup,
 {
-    type Item = (&'a [u8], u64, Score);
-
-    fn next(&'a mut self) -> Option<Self::Item> {
+    fn next(&mut self) -> Option<(&str, u64, Score)> {
         if let Some(iter) = &mut self.cur_iter {
             match iter.next() {
-                Some(index) => return Some((self.cur_key.as_slice(), index, self.cur_score)),
+                Some(index) => return Some((self.cur_key.as_str(), index, self.cur_score)),
                 None => {
                     self.cur_iter = None;
                     self.cur_key.clear();
@@ -178,7 +169,7 @@ where
                 Some(mut dupes) => {
                     let index = dupes.next().unwrap();
                     self.cur_key.clear();
-                    self.cur_key.extend_from_slice(key);
+                    self.cur_key.push_str(key);
                     self.cur_iter = Some(dupes);
                     self.cur_score = score;
                     (key, index, score)
@@ -189,7 +180,14 @@ where
 }
 
 /// FST stream on which various operations can be chained.
-pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
+pub trait SearchStream {
+    /// Emits the next scored document in this stream, or `None` to indicate
+    /// the stream has been exhausted.
+    ///
+    /// It is not specified what a stream does after `None` is emitted. In most
+    /// cases, `None` should be emitted on every subsequent call.
+    fn next(&mut self) -> Option<(&str, u64, Score)>;
+
     /// Scores a stream, using the given closure.
     ///
     /// # Examples
@@ -197,32 +195,30 @@ pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     /// Basic usage:
     ///
     /// ```
-    /// use fst::Streamer;
     /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
+    ///     ("foo", 0),
+    ///     ("foobar", 1))
     /// ).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
     /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3)));
-    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, 6)));
+    /// assert_eq!(strm.next(), Some(("foo", 0, 3)));
+    /// assert_eq!(strm.next(), Some(("foobar", 1, 6)));
     /// assert_eq!(strm.next(), None);
     /// ```
     ///
     /// You can also use this to build upon a previously set score:
     ///
     /// ```
-    /// use fst::Streamer;
     /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
+    ///     ("foo", 0),
+    ///     ("foobar", 1))
     /// ).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
@@ -230,13 +226,13 @@ pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     ///     .rescore(|key, _, _| key.len() as porigon::Score)
     ///     .rescore(|_, index, old_score| (old_score << 16) | index)
     /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 3 << 16)));
-    /// assert_eq!(strm.next(), Some(("foobar".as_bytes(), 1, (6 << 16) | 1)));
+    /// assert_eq!(strm.next(), Some(("foo", 0, 3 << 16)));
+    /// assert_eq!(strm.next(), Some(("foobar", 1, (6 << 16) | 1)));
     /// assert_eq!(strm.next(), None);
     /// ```
     fn rescore<F>(self, func: F) -> RescoredStream<F, Self>
     where
-        F: Fn(&[u8], u64, Score) -> Score,
+        F: Fn(&str, u64, Score) -> Score,
         Self: Sized,
     {
         RescoredStream::new(self, func)
@@ -247,24 +243,23 @@ pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     /// # Example
     ///
     /// ```
-    /// use fst::Streamer;
     /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 0),
-    ///     ("foobar".as_bytes(), 1))
+    ///     ("foo", 0),
+    ///     ("foobar", 1))
     /// ).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("foo")
-    ///     .filter(|key, _, _| key != "foobar".as_bytes())
+    ///     .filter(|key, _, _| key != "foobar")
     /// ;
-    /// assert_eq!(strm.next(), Some(("foo".as_bytes(), 0, 0)));
+    /// assert_eq!(strm.next(), Some(("foo", 0, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     fn filter<F>(self, func: F) -> FilteredStream<F, Self>
     where
-        F: Fn(&[u8], u64, Score) -> bool,
+        F: Fn(&str, u64, Score) -> bool,
         Self: Sized,
     {
         FilteredStream::new(self, func)
@@ -278,15 +273,14 @@ pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     /// # Example
     ///
     /// ```
-    /// use fst::Streamer;
     /// use porigon::{SearchableStorage, SearchStream};
     ///
     /// let mut items = vec!(
-    ///     ("this is a bar".as_bytes(), 15),
-    ///     ("is a bar".as_bytes(), (1 << 32) | 15),
-    ///     ("a bar".as_bytes(), (1 << 32) | 15),
-    ///     ("bar".as_bytes(), (1 << 32) | 15),
-    ///     ("barfoo".as_bytes(), 16)
+    ///     ("this is a bar", 15),
+    ///     ("is a bar", (1 << 32) | 15),
+    ///     ("a bar", (1 << 32) | 15),
+    ///     ("bar", (1 << 32) | 15),
+    ///     ("barfoo", 16)
     /// );
     /// items.sort_by_key(|(key, _)| *key);
     /// let storage = SearchableStorage::build_from_iter(items).unwrap();
@@ -295,17 +289,15 @@ pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     ///     .starts_with("bar")
     ///     .map(|key, index, score| (key, index & !(1 << 32), score))
     /// ;
-    /// assert_eq!(strm.next(), Some(("bar".as_bytes(), 15, 0)));
-    /// assert_eq!(strm.next(), Some(("barfoo".as_bytes(), 16, 0)));
+    /// assert_eq!(strm.next(), Some(("bar", 15, 0)));
+    /// assert_eq!(strm.next(), Some(("barfoo", 16, 0)));
     /// assert_eq!(strm.next(), None);
     /// ```
     fn map<F>(self, func: F) -> MappedStream<F, Self>
     where
-        F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+        F: Fn(&str, u64, Score) -> (&str, u64, Score),
         Self: Sized,
     {
         MappedStream::new(self, func)
     }
 }
-
-impl<S> SearchStream for S where S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {}

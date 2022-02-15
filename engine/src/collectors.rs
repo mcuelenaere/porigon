@@ -1,5 +1,4 @@
-use crate::Score;
-use fst::{IntoStreamer, Streamer};
+use crate::{Score, SearchStream};
 use std::cmp::{Ordering, Reverse};
 use std::collections::BinaryHeap;
 
@@ -55,7 +54,7 @@ impl TopScoreCollector {
         self.heap.clear();
     }
 
-    /// Consumes a `fst::Streamer`, collecting the items and only keeping the top N items (based on
+    /// Consumes a `SearchStream`, collecting the items and only keeping the top N items (based on
     /// their score).
     ///
     /// # Example
@@ -63,8 +62,8 @@ impl TopScoreCollector {
     /// use porigon::{SearchableStorage, SearchStream, TopScoreCollector};
     ///
     /// let storage = SearchableStorage::build_from_iter(vec!(
-    ///     ("foo".as_bytes(), 1),
-    ///     ("foobar".as_bytes(), 2),
+    ///     ("foo", 1),
+    ///     ("foobar", 2),
     /// )).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     /// let mut collector = TopScoreCollector::new(1);
@@ -80,12 +79,10 @@ impl TopScoreCollector {
     /// );
     /// assert_eq!(collector.top_documents()[0].index, 2);
     /// ```
-    pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
+    pub fn consume_stream<S>(&mut self, mut stream: S)
     where
-        I: for<'a> IntoStreamer<'a, Into = S, Item = (&'a [u8], u64, Score)>,
-        S: 'f + for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+        S: SearchStream,
     {
-        let mut stream = streamer.into_stream();
         while let Some((_, index, score)) = stream.next() {
             self.process_document(Document { score, index });
         }
