@@ -4,7 +4,7 @@ mod streams;
 
 pub use crate::{
     collectors::TopScoreCollector,
-    searchable::{SearchableStorage, Searchable},
+    searchable::{SearchableStorage, Searchable, ArchivedSearchable},
     streams::SearchStream
 };
 pub use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};

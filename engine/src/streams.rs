@@ -1,6 +1,6 @@
 use crate::Score;
 use fst::Streamer;
-use std::collections::HashMap;
+use crate::searchable::DuplicatesLookup;
 
 pub struct FilteredStream<F, S>
     where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
@@ -109,29 +109,6 @@ impl<'a, F, S> Streamer<'a> for RescoredStream<F, S>
     fn next(&'a mut self) -> Option<Self::Item> {
         let scorer_fn = &self.scorer;
         self.wrapped.next().map(|(key, index, score)| (key, index, scorer_fn(key, index, score)))
-    }
-}
-
-pub trait DuplicatesLookup {
-    type Iter: Iterator<Item=u64>;
-
-    fn get(&self, key: u64) -> Option<Self::Iter>;
-}
-
-impl<'a> DuplicatesLookup for &'a HashMap<u64, Vec<u64>> {
-    type Iter = std::iter::Cloned<std::slice::Iter<'a, u64>>;
-
-    fn get(&self, key: u64) -> Option<Self::Iter> {
-        HashMap::get(self, &key).map(|values| values.as_slice().into_iter().cloned())
-    }
-}
-
-#[cfg(feature = "rkyv_support")]
-impl<'a> DuplicatesLookup for &'a rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>> {
-    type Iter = std::iter::Cloned<std::slice::Iter<'a, u64>>;
-
-    fn get(&self, key: u64) -> Option<Self::Iter> {
-        rkyv::collections::ArchivedHashMap::get(self, &key).map(|values| values.as_slice().into_iter().cloned())
     }
 }
 

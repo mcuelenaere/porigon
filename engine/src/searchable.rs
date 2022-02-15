@@ -1,11 +1,55 @@
 use crate::Score;
-use crate::streams::{DeduplicatedStream, DuplicatesLookup, SearchStream};
+use crate::streams::{DeduplicatedStream, SearchStream};
 use fst::{IntoStreamer, Streamer, Map};
 use fst::automaton::{Automaton, Str, Subsequence};
 use levenshtein_automata::{LevenshteinAutomatonBuilder, Distance as LevenshteinDistance};
 use maybe_owned::MaybeOwned;
 use std::collections::HashMap;
 use itertools::Itertools;
+
+#[cfg_attr(feature = "serde_support", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "rkyv_support", derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize))]
+pub struct Duplicates {
+    offsets_map: HashMap<u64, usize>,
+    compressed_indices: Vec<u8>,
+}
+
+pub trait DuplicatesLookup {
+    type Iter: Iterator<Item=u64>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter>;
+}
+
+impl DuplicatesLookup for Duplicates {
+    type Iter = std::vec::IntoIter<u64>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter> {
+        self.offsets_map.get(&key).map(|offset| {
+            let mut reader = q_compress::BitReader::from(&self.compressed_indices);
+            let decompressor = q_compress::Decompressor::<u64>::default();
+            let flags = decompressor.header(&mut reader).unwrap();
+            reader.seek(*offset * 8);
+            let chunk = decompressor.chunk(&mut reader, &flags).unwrap().unwrap();
+            chunk.nums.into_iter()
+        })
+    }
+}
+
+#[cfg(feature = "rkyv_support")]
+impl DuplicatesLookup for ArchivedDuplicates {
+    type Iter = std::vec::IntoIter<u64>;
+
+    fn get(&self, key: u64) -> Option<Self::Iter> {
+        self.offsets_map.get(&key).map(|offset| {
+            let mut reader = q_compress::BitReader::from(&self.compressed_indices);
+            let decompressor = q_compress::Decompressor::<u64>::default();
+            let flags = decompressor.header(&mut reader).unwrap();
+            reader.seek(*offset as usize * 8);
+            let chunk = decompressor.chunk(&mut reader, &flags).unwrap().unwrap();
+            chunk.nums.into_iter()
+        })
+    }
+}
 
 /// Structure that contains all underlying data needed to construct a `Searchable`.
 ///
@@ -14,15 +58,15 @@ use itertools::Itertools;
 #[cfg_attr(feature = "rkyv_support", derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize))]
 pub struct SearchableStorage {
     fst_data: Vec<u8>,
-    duplicates: HashMap<u64, Vec<u64>>,
+    duplicates: Duplicates,
 }
 
 #[cfg(feature = "rkyv_support")]
 impl ArchivedSearchableStorage
     where SearchableStorage: rkyv::Archive
 {
-    pub fn to_searchable(&self) -> Result<Searchable<&rkyv::collections::ArchivedHashMap<u64, rkyv::vec::ArchivedVec<u64>>>, fst::Error> {
-        Ok(Searchable {
+    pub fn to_searchable(&self) -> Result<ArchivedSearchable, fst::Error> {
+        Ok(ArchivedSearchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
         })
@@ -30,7 +74,7 @@ impl ArchivedSearchableStorage
 }
 
 impl SearchableStorage {
-    pub fn to_searchable(&self) -> Result<Searchable<&HashMap<u64, Vec<u64>>>, fst::Error> {
+    pub fn to_searchable(&self) -> Result<Searchable, fst::Error> {
         Ok(Searchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
@@ -54,8 +98,16 @@ impl SearchableStorage {
     /// )).unwrap();
     /// ```
     pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error> where I: IntoIterator<Item=(&'a [u8], u64)> {
+        let mut bit_writer = q_compress::BitWriter::default();
+        let compressor = q_compress::Compressor::<u64>::from_config(q_compress::CompressorConfig {
+            delta_encoding_order: 1,
+            compression_level: 6,
+        });
+        compressor.header(&mut bit_writer).unwrap();
+        let header_offset = bit_writer.byte_size();
+
         // group items by key and build map
-        let mut duplicates = HashMap::new();
+        let mut offsets_map = HashMap::new();
         let map = Map::from_iter(
             iter
             .into_iter()
@@ -66,16 +118,25 @@ impl SearchableStorage {
                 if let Some((_, second)) = group.next() {
                     let mut indices = vec![first, second];
                     indices.extend(group.map(|(_, next)| next));
-                    duplicates.insert(first, indices);
+                    indices.sort();
+
+                    let offset = bit_writer.byte_size();
+                    compressor.chunk(indices.as_slice(), &mut bit_writer).unwrap();
+                    offsets_map.insert(first, offset - header_offset);
                 }
 
                 (key, first)
             })
         )?;
 
+        compressor.footer(&mut bit_writer).unwrap();
+
         Ok(Self {
             fst_data: map.into_fst().into_inner(),
-            duplicates,
+            duplicates: Duplicates {
+                offsets_map,
+                compressed_indices: bit_writer.pop(),
+            },
         })
     }
 }
@@ -84,12 +145,12 @@ impl SearchableStorage {
 ///
 /// This is a thin wrapper around `fst::Map`, providing easy access to querying it in
 /// various ways (exact_match, starts_with, levenshtein, ...).
-pub struct Searchable<'a, D: DuplicatesLookup> {
+pub struct SearchableInner<'a, D: DuplicatesLookup> {
     map: Map<&'a [u8]>,
-    duplicates: D,
+    duplicates: &'a D,
 }
 
-impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
+impl<'s, D: DuplicatesLookup> SearchableInner<'s, D> {
     fn create_stream<'a, A: 'a>(&'a self, automaton: A) -> impl SearchStream + 'a
         where A: Automaton
     {
@@ -107,7 +168,7 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
         }
 
         let stream = self.map.search(automaton).into_stream();
-        DeduplicatedStream::new(Adapter(stream), &self.duplicates)
+        DeduplicatedStream::new(Adapter(stream), self.duplicates)
     }
 
     /// Creates a `SearchStream` from a `StartsWith` matcher for the given `query`.
@@ -296,6 +357,10 @@ impl<'s, D: DuplicatesLookup> Searchable<'s, D> {
         self.create_stream(automaton)
     }
 }
+
+pub type Searchable<'a> = SearchableInner<'a, Duplicates>;
+#[cfg(feature = "rkyv_support")]
+pub type ArchivedSearchable<'a> = SearchableInner<'a, ArchivedDuplicates>;
 
 #[cfg(test)]
 mod tests {

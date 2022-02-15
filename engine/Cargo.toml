@@ -17,6 +17,7 @@ itertools = "0.10"
 maybe-owned = "0.3"
 serde = { version = "1.0", features = ["derive"], optional = true }
 rkyv = { version = "0.7", optional = true }
+q_compress = { git = "https://github.com/mwlon/quantile-compression" }
 
 [features]
 serde_support = [ "serde" ]
