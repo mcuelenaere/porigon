@@ -9,12 +9,9 @@ use q_compress::errors::QCompressError;
 use std::collections::HashMap;
 use thiserror::Error;
 
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
-    feature = "serde_support",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-#[cfg_attr(
-    feature = "rkyv_support",
+    feature = "rkyv",
     derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)
 )]
 pub struct Duplicates {
@@ -43,7 +40,7 @@ impl DuplicatesLookup for Duplicates {
     }
 }
 
-#[cfg(feature = "rkyv_support")]
+#[cfg(feature = "rkyv")]
 impl DuplicatesLookup for ArchivedDuplicates {
     type Iter = std::vec::IntoIter<u64>;
 
@@ -62,12 +59,9 @@ impl DuplicatesLookup for ArchivedDuplicates {
 /// Structure that contains all underlying data needed to construct a `Searchable`.
 ///
 /// NOTE: this struct is serializable
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
-    feature = "serde_support",
-    derive(serde::Serialize, serde::Deserialize)
-)]
-#[cfg_attr(
-    feature = "rkyv_support",
+    feature = "rkyv",
     derive(rkyv::Archive, rkyv::Serialize, rkyv::Deserialize)
 )]
 pub struct SearchableStorage {
@@ -89,7 +83,7 @@ pub enum LoadError {
     ReadFst(#[from] fst::Error),
 }
 
-#[cfg(feature = "rkyv_support")]
+#[cfg(feature = "rkyv")]
 impl ArchivedSearchableStorage
 where
     SearchableStorage: rkyv::Archive,
@@ -399,7 +393,7 @@ impl<'s, D: DuplicatesLookup> SearchableInner<'s, D> {
 }
 
 pub type Searchable<'a> = SearchableInner<'a, Duplicates>;
-#[cfg(feature = "rkyv_support")]
+#[cfg(feature = "rkyv")]
 pub type ArchivedSearchable<'a> = SearchableInner<'a, ArchivedDuplicates>;
 
 #[cfg(test)]

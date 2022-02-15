@@ -14,5 +14,5 @@ rkyv = "0.7.29"
 rkyv_derive = "0.7.29"
 serde = { version = "1.0", features = ["derive"] }
 stats_alloc = "0.1.8"
-porigon = { path = "../engine", features = ["rkyv_support"] }
+porigon = { path = "../engine", features = ["rkyv"] }
 wasm-bindgen = { version = "0.2", features = ["serde-serialize"] }
