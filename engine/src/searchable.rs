@@ -2,10 +2,12 @@ use crate::streams::{DeduplicatedStream, SearchStream};
 use crate::Score;
 use fst::automaton::{Automaton, Str, Subsequence};
 use fst::{IntoStreamer, Map, Streamer};
-use itertools::Itertools;
+use itertools::{process_results, Itertools};
 use levenshtein_automata::{Distance as LevenshteinDistance, LevenshteinAutomatonBuilder};
 use maybe_owned::MaybeOwned;
+use q_compress::errors::QCompressError;
 use std::collections::HashMap;
+use thiserror::Error;
 
 #[cfg_attr(
     feature = "serde_support",
@@ -73,12 +75,26 @@ pub struct SearchableStorage {
     duplicates: Duplicates,
 }
 
+#[derive(Error, Debug)]
+pub enum BuildError {
+    #[error("could not build FST: {0}")]
+    BuildFst(#[from] fst::Error),
+    #[error("could not compress indices: {0}")]
+    CompressIndices(#[from] QCompressError),
+}
+
+#[derive(Error, Debug)]
+pub enum LoadError {
+    #[error("could not read FST: {0}")]
+    ReadFst(#[from] fst::Error),
+}
+
 #[cfg(feature = "rkyv_support")]
 impl ArchivedSearchableStorage
 where
     SearchableStorage: rkyv::Archive,
 {
-    pub fn to_searchable(&self) -> Result<ArchivedSearchable, fst::Error> {
+    pub fn to_searchable(&self) -> Result<ArchivedSearchable, LoadError> {
         Ok(ArchivedSearchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
@@ -87,7 +103,7 @@ where
 }
 
 impl SearchableStorage {
-    pub fn to_searchable(&self) -> Result<Searchable, fst::Error> {
+    pub fn to_searchable(&self) -> Result<Searchable, LoadError> {
         Ok(Searchable {
             map: Map::new(self.fst_data.as_slice())?,
             duplicates: &self.duplicates,
@@ -110,7 +126,7 @@ impl SearchableStorage {
     ///     ("foo", 2),
     /// )).unwrap();
     /// ```
-    pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, fst::Error>
+    pub fn build_from_iter<'a, I>(iter: I) -> Result<Self, BuildError>
     where
         I: IntoIterator<Item = (&'a str, u64)>,
     {
@@ -119,31 +135,29 @@ impl SearchableStorage {
             delta_encoding_order: 1,
             compression_level: 6,
         });
-        compressor.header(&mut bit_writer).unwrap();
+        compressor.header(&mut bit_writer)?;
         let header_offset = bit_writer.byte_size();
 
         // group items by key and build map
         let mut offsets_map = HashMap::new();
-        let map = Map::from_iter(iter.into_iter().group_by(|(key, _)| *key).into_iter().map(
-            |(key, mut group)| {
-                let (_, first) = group.next().unwrap();
-                if let Some((_, second)) = group.next() {
-                    let mut indices = vec![first, second];
-                    indices.extend(group.map(|(_, next)| next));
-                    indices.sort();
+        let iter = iter.into_iter().group_by(|(key, _)| *key);
+        let iter = iter.into_iter().map(|(key, mut group)| {
+            let (_, first) = group.next().unwrap();
+            if let Some((_, second)) = group.next() {
+                let mut indices = vec![first, second];
+                indices.extend(group.map(|(_, next)| next));
+                indices.sort();
 
-                    let offset = bit_writer.byte_size();
-                    compressor
-                        .chunk(indices.as_slice(), &mut bit_writer)
-                        .unwrap();
-                    offsets_map.insert(first, offset - header_offset);
-                }
+                let offset = bit_writer.byte_size();
+                compressor.chunk(indices.as_slice(), &mut bit_writer)?;
+                offsets_map.insert(first, offset - header_offset);
+            }
 
-                (key, first)
-            },
-        ))?;
+            Ok::<_, QCompressError>((key, first))
+        });
+        let map = process_results(iter, |iter| Map::from_iter(iter))??;
 
-        compressor.footer(&mut bit_writer).unwrap();
+        compressor.footer(&mut bit_writer)?;
 
         Ok(Self {
             fst_data: map.into_fst().into_inner(),
