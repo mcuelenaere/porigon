@@ -35,11 +35,6 @@ pub fn memory_stats() -> JsValue {
     JsValue::from_serde(&result).unwrap()
 }
 
-#[inline]
-fn err_to_js<D: std::fmt::Display>(prefix: &'static str, displayable: D) -> JsValue {
-    JsValue::from(format!("{}: {}", prefix, displayable))
-}
-
 #[derive(Archive, Serialize)]
 struct SearchData {
     titles: SearchableStorage,
@@ -53,10 +48,10 @@ impl ArchivedSearchData {
 }
 
 impl SearchData {
-    pub fn to_bytes(&self) -> Vec<u8> {
+    pub fn to_bytes(&self) -> Result<Vec<u8>, JsError> {
         let mut serializer = AllocSerializer::<4096>::default();
-        serializer.serialize_value(self).unwrap();
-        serializer.into_serializer().into_inner().into_vec()
+        serializer.serialize_value(self)?;
+        Ok(serializer.into_serializer().into_inner().into_vec())
     }
 }
 
@@ -77,16 +72,16 @@ pub struct SearchResult {
 #[wasm_bindgen]
 impl Searcher {
     #[wasm_bindgen(constructor)]
-    pub fn new(data: Vec<u8>, limit: usize) -> Result<Searcher, JsValue> {
+    pub fn new(data: Vec<u8>, limit: usize) -> Searcher {
         let collector = TopScoreCollector::new(limit);
         let levenshtein_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
         let levenshtein_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
-        Ok(Searcher {
+        Searcher {
             data,
             collector,
             levenshtein_builder_1,
             levenshtein_builder_2,
-        })
+        }
     }
 
     pub fn search(&mut self, query: &str) -> JsValue {
@@ -154,21 +149,19 @@ pub struct BuildData {
 }
 
 #[wasm_bindgen]
-pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
-    let data: BuildData = val
-        .into_serde()
-        .map_err(|err| err_to_js("failed to parse data", err))?;
+pub fn build(val: &JsValue) -> Result<Vec<u8>, JsError> {
+    let data: BuildData = val.into_serde()?;
     let build_searchable = |input: Vec<(u64, String)>| {
         let mut i: Vec<(&str, u64)> = input
             .iter()
             .map(|(key, val)| (val.as_str(), *key))
             .collect();
         i.sort_by_key(|(key, _)| *key);
-        SearchableStorage::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
+        SearchableStorage::build_from_iter(i)
     };
     let search_data = SearchData {
         titles: build_searchable(data.titles)?,
         ratings: data.ratings,
     };
-    Ok(search_data.to_bytes())
+    Ok(search_data.to_bytes()?)
 }
