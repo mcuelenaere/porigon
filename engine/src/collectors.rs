@@ -81,8 +81,9 @@ impl TopScoreCollector {
     /// assert_eq!(collector.top_documents()[0].index, 2);
     /// ```
     pub fn consume_stream<'f, I, S>(&mut self, streamer: I)
-        where I: for<'a> IntoStreamer<'a, Into=S, Item=(&'a [u8], u64, Score)>,
-              S: 'f + for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
+    where
+        I: for<'a> IntoStreamer<'a, Into = S, Item = (&'a [u8], u64, Score)>,
+        S: 'f + for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
     {
         let mut stream = streamer.into_stream();
         while let Some((_, index, score)) = stream.next() {
@@ -145,7 +146,10 @@ mod tests {
     fn test_collector() {
         let mut collector = TopScoreCollector::new(5);
         for i in 0..10 {
-            collector.process_document(Document { index: i, score: (i as Score) });
+            collector.process_document(Document {
+                index: i,
+                score: (i as Score),
+            });
         }
         let top_docs = collector.top_documents();
 
@@ -162,11 +166,23 @@ mod tests {
     fn test_collector_duplicates() {
         let mut collector = TopScoreCollector::new(7);
         for i in 0..10 {
-            collector.process_document(Document { index: i, score: (i as Score) });
+            collector.process_document(Document {
+                index: i,
+                score: (i as Score),
+            });
         }
-        collector.process_document(Document { index: 3, score: 6 as Score });
-        collector.process_document(Document { index: 6, score: 2 as Score });
-        collector.process_document(Document { index: 2, score: 8 as Score });
+        collector.process_document(Document {
+            index: 3,
+            score: 6 as Score,
+        });
+        collector.process_document(Document {
+            index: 6,
+            score: 2 as Score,
+        });
+        collector.process_document(Document {
+            index: 2,
+            score: 8 as Score,
+        });
         let top_docs = collector.top_documents();
 
         // check scores

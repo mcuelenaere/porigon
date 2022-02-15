@@ -1,12 +1,16 @@
 extern crate stats_alloc;
 extern crate wasm_bindgen;
 
-use wasm_bindgen::prelude::*;
-use porigon::{TopScoreCollector, LevenshteinAutomatonBuilder, SearchableStorage, SearchStream};
-use rkyv::{Archive, Serialize, archived_root, ser::{serializers::AllocSerializer, Serializer}};
-use std::collections::HashMap;
+use porigon::{LevenshteinAutomatonBuilder, SearchStream, SearchableStorage, TopScoreCollector};
+use rkyv::{
+    archived_root,
+    ser::{serializers::AllocSerializer, Serializer},
+    Archive, Serialize,
+};
 use stats_alloc::{StatsAlloc, INSTRUMENTED_SYSTEM};
 use std::alloc::System;
+use std::collections::HashMap;
+use wasm_bindgen::prelude::*;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
@@ -76,15 +80,18 @@ impl Searcher {
         let collector = TopScoreCollector::new(limit);
         let levenshtein_builder_1 = LevenshteinAutomatonBuilder::new(1, false);
         let levenshtein_builder_2 = LevenshteinAutomatonBuilder::new(2, false);
-        Ok(Searcher { data, collector, levenshtein_builder_1, levenshtein_builder_2 })
+        Ok(Searcher {
+            data,
+            collector,
+            levenshtein_builder_1,
+            levenshtein_builder_2,
+        })
     }
 
     pub fn search(&mut self, query: &str) -> JsValue {
         let data = ArchivedSearchData::from_bytes(&self.data);
         let ratings = &data.ratings;
-        let get_rating_for = move |index| {
-            *ratings.get(&index).unwrap_or(&0) as u64
-        };
+        let get_rating_for = move |index| *ratings.get(&index).unwrap_or(&0) as u64;
 
         let titles = data.titles.to_searchable().unwrap();
 
@@ -93,12 +100,12 @@ impl Searcher {
         self.collector.consume_stream(
             titles
                 .exact_match(query)
-                .rescore(move |_, index, _| 50000 + get_rating_for(index))
+                .rescore(move |_, index, _| 50000 + get_rating_for(index)),
         );
         self.collector.consume_stream(
             titles
                 .starts_with(query)
-                .rescore(move |_, index, _| 40000 + get_rating_for(index))
+                .rescore(move |_, index, _| 40000 + get_rating_for(index)),
         );
 
         if query.len() > 3 {
@@ -106,28 +113,33 @@ impl Searcher {
             self.collector.consume_stream(
                 titles
                     .levenshtein_exact_match(&self.levenshtein_builder_1, query)
-                    .rescore(move |_, index, _| 30000 + get_rating_for(index))
+                    .rescore(move |_, index, _| 30000 + get_rating_for(index)),
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_starts_with(&self.levenshtein_builder_1, query)
-                    .rescore(move |_, index, _| 20000 + get_rating_for(index))
+                    .rescore(move |_, index, _| 20000 + get_rating_for(index)),
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_exact_match(&self.levenshtein_builder_2, query)
-                    .rescore(move |_, index, _| 10000 + get_rating_for(index))
+                    .rescore(move |_, index, _| 10000 + get_rating_for(index)),
             );
             self.collector.consume_stream(
                 titles
                     .levenshtein_starts_with(&self.levenshtein_builder_2, query)
-                    .rescore(move |_, index, _| get_rating_for(index))
+                    .rescore(move |_, index, _| get_rating_for(index)),
             );
         }
 
-        let results: Vec<SearchResult> = self.collector.top_documents()
+        let results: Vec<SearchResult> = self
+            .collector
+            .top_documents()
             .iter()
-            .map(|doc| SearchResult { score: doc.score, index: doc.index })
+            .map(|doc| SearchResult {
+                score: doc.score,
+                index: doc.index,
+            })
             .collect();
 
         JsValue::from_serde(&results).unwrap()
@@ -142,9 +154,14 @@ pub struct BuildData {
 
 #[wasm_bindgen]
 pub fn build(val: &JsValue) -> Result<Vec<u8>, JsValue> {
-    let data: BuildData = val.into_serde().map_err(|err| err_to_js("failed to parse data", err))?;
+    let data: BuildData = val
+        .into_serde()
+        .map_err(|err| err_to_js("failed to parse data", err))?;
     let build_searchable = |input: Vec<(u64, String)>| {
-        let mut i: Vec<(&[u8], u64)> = input.iter().map(|(key, val)| (val.as_bytes(), *key)).collect();
+        let mut i: Vec<(&[u8], u64)> = input
+            .iter()
+            .map(|(key, val)| (val.as_bytes(), *key))
+            .collect();
         i.sort_by_key(|(key, _)| *key);
         SearchableStorage::build_from_iter(i).map_err(|err| err_to_js("could not build FST", err))
     };

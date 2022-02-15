@@ -1,10 +1,11 @@
+use crate::searchable::DuplicatesLookup;
 use crate::Score;
 use fst::Streamer;
-use crate::searchable::DuplicatesLookup;
 
 pub struct FilteredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> bool,
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> bool,
 {
     cur_key: Vec<u8>,
     filter: F,
@@ -12,8 +13,9 @@ pub struct FilteredStream<F, S>
 }
 
 impl<F, S> FilteredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> bool,
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> bool,
 {
     pub fn new(streamer: S, filter: F) -> Self {
         Self {
@@ -25,8 +27,9 @@ impl<F, S> FilteredStream<F, S>
 }
 
 impl<'a, F, S> Streamer<'a> for FilteredStream<F, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> bool,
+where
+    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> bool,
 {
     type Item = (&'a [u8], u64, Score);
 
@@ -49,16 +52,18 @@ impl<'a, F, S> Streamer<'a> for FilteredStream<F, S>
 }
 
 pub struct MappedStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
 {
     mapper: F,
     wrapped: S,
 }
 
 impl<F, S> MappedStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
 {
     pub fn new(streamer: S, mapper: F) -> Self {
         Self {
@@ -69,28 +74,33 @@ impl<F, S> MappedStream<F, S>
 }
 
 impl<'a, F, S> Streamer<'a> for MappedStream<F, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+where
+    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
 {
     type Item = (&'a [u8], u64, Score);
 
     fn next(&'a mut self) -> Option<Self::Item> {
         let mapper_fn = &self.mapper;
-        self.wrapped.next().map(|(key, index, score)| mapper_fn(key, index, score))
+        self.wrapped
+            .next()
+            .map(|(key, index, score)| mapper_fn(key, index, score))
     }
 }
 
 pub struct RescoredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> Score,
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> Score,
 {
     scorer: F,
     wrapped: S,
 }
 
 impl<F, S> RescoredStream<F, S>
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> Score,
+where
+    S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> Score,
 {
     pub fn new(streamer: S, scorer: F) -> Self {
         Self {
@@ -101,20 +111,24 @@ impl<F, S> RescoredStream<F, S>
 }
 
 impl<'a, F, S> Streamer<'a> for RescoredStream<F, S>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
-          F: Fn(&[u8], u64, Score) -> Score,
+where
+    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    F: Fn(&[u8], u64, Score) -> Score,
 {
     type Item = (&'a [u8], u64, Score);
 
     fn next(&'a mut self) -> Option<Self::Item> {
         let scorer_fn = &self.scorer;
-        self.wrapped.next().map(|(key, index, score)| (key, index, scorer_fn(key, index, score)))
+        self.wrapped
+            .next()
+            .map(|(key, index, score)| (key, index, scorer_fn(key, index, score)))
     }
 }
 
 pub struct DeduplicatedStream<'a, S, D>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
-          D: DuplicatesLookup
+where
+    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    D: DuplicatesLookup,
 {
     cur_key: Vec<u8>,
     cur_iter: Option<D::Iter>,
@@ -124,8 +138,9 @@ pub struct DeduplicatedStream<'a, S, D>
 }
 
 impl<'a, S, D> DeduplicatedStream<'a, S, D>
-    where S: for<'b> Streamer<'b, Item=(&'b [u8], u64, Score)>,
-          D: DuplicatesLookup
+where
+    S: for<'b> Streamer<'b, Item = (&'b [u8], u64, Score)>,
+    D: DuplicatesLookup,
 {
     pub fn new(streamer: S, duplicates: &'a D) -> Self {
         Self {
@@ -139,8 +154,9 @@ impl<'a, S, D> DeduplicatedStream<'a, S, D>
 }
 
 impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
-    where S: for<'c> Streamer<'c, Item=(&'c [u8], u64, Score)>,
-          D: DuplicatesLookup
+where
+    S: for<'c> Streamer<'c, Item = (&'c [u8], u64, Score)>,
+    D: DuplicatesLookup,
 {
     type Item = (&'a [u8], u64, Score);
 
@@ -156,8 +172,9 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
             }
         }
 
-        self.wrapped.next().map(|(key, index, score)| {
-            match self.duplicates.get(index) {
+        self.wrapped
+            .next()
+            .map(|(key, index, score)| match self.duplicates.get(index) {
                 Some(mut dupes) => {
                     let index = dupes.next().unwrap();
                     self.cur_key.clear();
@@ -165,15 +182,14 @@ impl<'a, 'b, S, D> Streamer<'a> for DeduplicatedStream<'b, S, D>
                     self.cur_iter = Some(dupes);
                     self.cur_score = score;
                     (key, index, score)
-                },
+                }
                 None => (key, index, score),
-            }
-        })
+            })
     }
 }
 
 /// FST stream on which various operations can be chained.
-pub trait SearchStream: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
+pub trait SearchStream: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {
     /// Scores a stream, using the given closure.
     ///
     /// # Examples
@@ -219,8 +235,9 @@ pub trait SearchStream: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn rescore<F>(self, func: F) -> RescoredStream<F, Self>
-        where F: Fn(&[u8], u64, Score) -> Score,
-              Self: Sized
+    where
+        F: Fn(&[u8], u64, Score) -> Score,
+        Self: Sized,
     {
         RescoredStream::new(self, func)
     }
@@ -246,8 +263,9 @@ pub trait SearchStream: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn filter<F>(self, func: F) -> FilteredStream<F, Self>
-        where F: Fn(&[u8], u64, Score) -> bool,
-              Self: Sized
+    where
+        F: Fn(&[u8], u64, Score) -> bool,
+        Self: Sized,
     {
         FilteredStream::new(self, func)
     }
@@ -282,14 +300,12 @@ pub trait SearchStream: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)> {
     /// assert_eq!(strm.next(), None);
     /// ```
     fn map<F>(self, func: F) -> MappedStream<F, Self>
-        where F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
-              Self: Sized
+    where
+        F: Fn(&[u8], u64, Score) -> (&[u8], u64, Score),
+        Self: Sized,
     {
         MappedStream::new(self, func)
     }
 }
 
-impl<S> SearchStream for S
-    where S: for<'a> Streamer<'a, Item=(&'a [u8], u64, Score)>
-{
-}
+impl<S> SearchStream for S where S: for<'a> Streamer<'a, Item = (&'a [u8], u64, Score)> {}
