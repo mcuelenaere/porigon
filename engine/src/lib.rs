@@ -1,10 +1,10 @@
-mod collectors;
-mod searchable;
-mod streams;
+pub mod collectors;
+pub mod searchable;
+pub mod streams;
 
 pub use crate::{
     collectors::TopScoreCollector,
-    searchable::{ArchivedSearchable, Searchable, SearchableStorage},
+    searchable::{Searchable, SearchableStorage},
     streams::SearchStream,
 };
 pub use levenshtein_automata::{Distance as LevenshteinDistance, LevenshteinAutomatonBuilder};
