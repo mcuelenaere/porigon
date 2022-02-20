@@ -9,12 +9,6 @@ function openFile(filename) {
   });
 }
 
-function transliterate(s) {
-    // https://towardsdatascience.com/difference-between-nfd-nfc-nfkd-and-nfkc-explained-with-python-code-e2631f96ae6c
-    // https://en.wikipedia.org/wiki/Combining_character#Unicode_ranges
-    return s.normalize("NFKD").replace(/[\u0300-\u036F\u1AB0-\u1AFF\u1DC0-\u1DFF\u20D0-\u20FF\uFE20-\uFE2F]/g, "").toLowerCase();
-}
-
 const IGNORED_TYPES = ['short', 'video', 'tvEpisode', 'tvShort', 'tvSpecial'];
 
 async function readFromTitles() {
@@ -32,12 +26,10 @@ async function readFromTitles() {
         }
 
         const id = parseInt(tconst.replace(/^tt0*/, ''));
-        const transliteratedPrimaryTitle = transliterate(primaryTitle);
-        const transliteratedOriginalTitle = transliterate(originalTitle);
 
-        titles.push([id, transliteratedPrimaryTitle]);
-        if (transliteratedPrimaryTitle !== transliteratedOriginalTitle) {
-            titles.push([id, transliteratedOriginalTitle]);
+        titles.push([primaryTitle, id]);
+        if (primaryTitle !== originalTitle) {
+            titles.push([originalTitle, id]);
         }
         lookup[id] = {
             titleType,

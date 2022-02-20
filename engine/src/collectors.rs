@@ -59,9 +59,9 @@ impl TopScoreCollector {
     ///
     /// # Example
     /// ```
-    /// use porigon::{SearchableStorage, SearchStream, TopScoreCollector};
+    /// use porigon::{SearchableBuilder, SearchStream, TopScoreCollector};
     ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
+    /// let storage = SearchableBuilder::default().build(vec!(
     ///     ("foo", 1),
     ///     ("foobar", 2),
     /// )).unwrap();

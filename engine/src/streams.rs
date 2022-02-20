@@ -1,4 +1,3 @@
-use crate::searchable::DuplicatesLookup;
 use crate::Score;
 
 pub struct FilteredStream<F, S>
@@ -118,67 +117,6 @@ where
     }
 }
 
-pub struct DeduplicatedStream<'a, S, D>
-where
-    S: SearchStream,
-    D: DuplicatesLookup,
-{
-    cur_key: String,
-    cur_iter: Option<D::Iter>,
-    cur_score: Score,
-    duplicates: &'a D,
-    wrapped: S,
-}
-
-impl<'a, S, D> DeduplicatedStream<'a, S, D>
-where
-    S: SearchStream,
-    D: DuplicatesLookup,
-{
-    pub fn new(streamer: S, duplicates: &'a D) -> Self {
-        Self {
-            cur_key: String::new(),
-            cur_iter: None,
-            cur_score: 0,
-            duplicates,
-            wrapped: streamer,
-        }
-    }
-}
-
-impl<'a, S, D> SearchStream for DeduplicatedStream<'a, S, D>
-where
-    S: SearchStream,
-    D: DuplicatesLookup,
-{
-    fn next(&mut self) -> Option<(&str, u64, Score)> {
-        if let Some(iter) = &mut self.cur_iter {
-            match iter.next() {
-                Some(index) => return Some((self.cur_key.as_str(), index, self.cur_score)),
-                None => {
-                    self.cur_iter = None;
-                    self.cur_key.clear();
-                    self.cur_score = 0;
-                }
-            }
-        }
-
-        self.wrapped
-            .next()
-            .map(|(key, index, score)| match self.duplicates.get(index) {
-                Some(mut dupes) => {
-                    let index = dupes.next().unwrap();
-                    self.cur_key.clear();
-                    self.cur_key.push_str(key);
-                    self.cur_iter = Some(dupes);
-                    self.cur_score = score;
-                    (key, index, score)
-                }
-                None => (key, index, score),
-            })
-    }
-}
-
 /// FST stream on which various operations can be chained.
 pub trait SearchStream {
     /// Emits the next scored document in this stream, or `None` to indicate
@@ -195,9 +133,9 @@ pub trait SearchStream {
     /// Basic usage:
     ///
     /// ```
-    /// use porigon::{SearchableStorage, SearchStream};
+    /// use porigon::{SearchableBuilder, SearchStream};
     ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
+    /// let storage = SearchableBuilder::default().build(vec!(
     ///     ("foo", 0),
     ///     ("foobar", 1))
     /// ).unwrap();
@@ -214,9 +152,9 @@ pub trait SearchStream {
     /// You can also use this to build upon a previously set score:
     ///
     /// ```
-    /// use porigon::{SearchableStorage, SearchStream};
+    /// use porigon::{SearchableBuilder, SearchStream};
     ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
+    /// let storage = SearchableBuilder::default().build(vec!(
     ///     ("foo", 0),
     ///     ("foobar", 1))
     /// ).unwrap();
@@ -243,9 +181,9 @@ pub trait SearchStream {
     /// # Example
     ///
     /// ```
-    /// use porigon::{SearchableStorage, SearchStream};
+    /// use porigon::{SearchableBuilder, SearchStream};
     ///
-    /// let storage = SearchableStorage::build_from_iter(vec!(
+    /// let storage = SearchableBuilder::default().build(vec!(
     ///     ("foo", 0),
     ///     ("foobar", 1))
     /// ).unwrap();
@@ -273,7 +211,7 @@ pub trait SearchStream {
     /// # Example
     ///
     /// ```
-    /// use porigon::{SearchableStorage, SearchStream};
+    /// use porigon::{SearchableBuilder, SearchStream};
     ///
     /// let mut items = vec!(
     ///     ("this is a bar", 15),
@@ -283,7 +221,7 @@ pub trait SearchStream {
     ///     ("barfoo", 16)
     /// );
     /// items.sort_by_key(|(key, _)| *key);
-    /// let storage = SearchableStorage::build_from_iter(items).unwrap();
+    /// let storage = SearchableBuilder::default().build(items).unwrap();
     /// let searchable = storage.to_searchable().unwrap();
     /// let mut strm = searchable
     ///     .starts_with("bar")

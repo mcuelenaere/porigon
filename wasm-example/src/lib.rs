@@ -1,7 +1,7 @@
-extern crate stats_alloc;
-extern crate wasm_bindgen;
-
+use porigon::doc_id_storage::DefaultStorage;
 use porigon::levenshtein::LevenshteinAutomatonBuilder;
+use porigon::searchable::SearchableBuilder;
+use porigon::text::DefaultTextNormalizer;
 use porigon::{SearchStream, SearchableStorage, TopScoreCollector};
 use rkyv::{
     archived_root,
@@ -37,7 +37,7 @@ pub fn memory_stats() -> JsValue {
 
 #[derive(Archive, Serialize)]
 struct SearchData {
-    titles: SearchableStorage,
+    titles: SearchableStorage<DefaultStorage, DefaultTextNormalizer>,
     ratings: HashMap<u64, u32>,
 }
 
@@ -144,23 +144,15 @@ impl Searcher {
 
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct BuildData {
-    titles: Vec<(u64, String)>,
+    titles: Vec<(String, u64)>,
     ratings: HashMap<u64, u32>,
 }
 
 #[wasm_bindgen]
 pub fn build(val: &JsValue) -> Result<Vec<u8>, JsError> {
     let data: BuildData = val.into_serde()?;
-    let build_searchable = |input: Vec<(u64, String)>| {
-        let mut i: Vec<(&str, u64)> = input
-            .iter()
-            .map(|(key, val)| (val.as_str(), *key))
-            .collect();
-        i.sort_by_key(|(key, _)| *key);
-        SearchableStorage::build_from_iter(i)
-    };
     let search_data = SearchData {
-        titles: build_searchable(data.titles)?,
+        titles: SearchableBuilder::default().build(data.titles)?,
         ratings: data.ratings,
     };
     Ok(search_data.to_bytes()?)
