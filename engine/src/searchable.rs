@@ -30,7 +30,8 @@ impl DuplicatesLookup for Duplicates {
 
     fn get(&self, key: u64) -> Option<Self::Iter> {
         self.offsets_map.get(&key).map(|offset| {
-            let mut reader = q_compress::BitReader::from(&self.compressed_indices);
+            let words = q_compress::BitWords::from(&self.compressed_indices);
+            let mut reader = q_compress::BitReader::from(&words);
             let decompressor = q_compress::Decompressor::<u64>::default();
             let flags = decompressor.header(&mut reader).unwrap();
             reader.seek(*offset * 8);
@@ -46,7 +47,8 @@ impl DuplicatesLookup for ArchivedDuplicates {
 
     fn get(&self, key: u64) -> Option<Self::Iter> {
         self.offsets_map.get(&key).map(|offset| {
-            let mut reader = q_compress::BitReader::from(&self.compressed_indices);
+            let words = q_compress::BitWords::from(&self.compressed_indices);
+            let mut reader = q_compress::BitReader::from(&words);
             let decompressor = q_compress::Decompressor::<u64>::default();
             let flags = decompressor.header(&mut reader).unwrap();
             reader.seek(*offset as usize * 8);
