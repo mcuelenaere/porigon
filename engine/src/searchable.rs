@@ -157,7 +157,7 @@ impl SearchableStorage {
             fst_data: map.into_fst().into_inner(),
             duplicates: Duplicates {
                 offsets_map,
-                compressed_indices: bit_writer.pop(),
+                compressed_indices: bit_writer.bytes(),
             },
         })
     }
