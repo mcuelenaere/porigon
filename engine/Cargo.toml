@@ -17,5 +17,5 @@ itertools = "0.10"
 maybe-owned = "0.3"
 serde = { version = "1.0", features = ["derive"], optional = true }
 rkyv = { version = "0.7", optional = true }
-q_compress = "0.9.3"
+q_compress = "0.10.0"
 thiserror = "1.0"
