@@ -58,6 +58,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
+When use the library in browser, load the FST as follows:
+```js
+  let fst_data = await fetch("./data/fst.bin").then(response => response.arrayBuffer());
+  fst_data  = new Uint8Array(fst_data);
+```
+
 Check out the documentation or `wasm-example` for a more examples.
 
 ### Alternatives
